@@ -37,6 +37,20 @@ const dailyReportEndSchema = z.object({
   gpsAccuracy: z.coerce.number().nullable().optional(),
 });
 
+function calculateDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371e3; // Radius bumi dalam meter
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+const MAX_ATTENDANCE_DISTANCE_METERS = 200;
+
 export const shiftsRouter = new Hono<AppEnv>();
 
 // POST /daily-reports/start
@@ -79,6 +93,31 @@ shiftsRouter.post('/daily-reports/start', requireRole('BOOTH_ATTENDANT'), async 
         },
         403
       );
+    }
+
+    // Validasi radius GPS maksimal 200 meter
+    const booth = await db.query.booths.findFirst({
+      where: eq(schema.booths.id, targetBoothId),
+    });
+
+    if (booth && booth.latitude && booth.longitude && gpsLatitude != null && gpsLongitude != null) {
+      const bLat = parseFloat(booth.latitude);
+      const bLng = parseFloat(booth.longitude);
+      if (!isNaN(bLat) && !isNaN(bLng)) {
+        const dist = calculateDistanceMeters(bLat, bLng, gpsLatitude, gpsLongitude);
+        if (dist > MAX_ATTENDANCE_DISTANCE_METERS) {
+          return c.json(
+            {
+              success: false,
+              error: {
+                code: 'GPS_OUT_OF_RANGE',
+                message: `Akses Ditolak: Lokasi Anda (${Math.round(dist)} meter) berada di luar batas radius maksimal 200 meter dari booth (${booth.name || 'Booth'}).`,
+              },
+            },
+            400
+          );
+        }
+      }
     }
 
     const [report] = await db
@@ -139,6 +178,41 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
         eq(schema.dailyReports.reportDate, today)
       ),
     });
+
+    const targetBoothId = existingReport?.boothId || (
+      await db.query.boothAssignments.findFirst({
+        where: and(
+          eq(schema.boothAssignments.userId, user.id),
+          eq(schema.boothAssignments.assignmentDate, today)
+        ),
+      })
+    )?.boothId;
+
+    if (targetBoothId) {
+      const booth = await db.query.booths.findFirst({
+        where: eq(schema.booths.id, targetBoothId),
+      });
+
+      if (booth && booth.latitude && booth.longitude && gpsLatitude != null && gpsLongitude != null) {
+        const bLat = parseFloat(booth.latitude);
+        const bLng = parseFloat(booth.longitude);
+        if (!isNaN(bLat) && !isNaN(bLng)) {
+          const dist = calculateDistanceMeters(bLat, bLng, gpsLatitude, gpsLongitude);
+          if (dist > MAX_ATTENDANCE_DISTANCE_METERS) {
+            return c.json(
+              {
+                success: false,
+                error: {
+                  code: 'GPS_OUT_OF_RANGE',
+                  message: `Akses Ditolak: Lokasi Anda (${Math.round(dist)} meter) berada di luar batas radius maksimal 200 meter dari booth (${booth.name || 'Booth'}).`,
+                },
+              },
+              400
+            );
+          }
+        }
+      }
+    }
 
     if (existingReport) {
       const [updated] = await db
