@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, and } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import * as schema from '../db/schema/index.js';
 import { AppEnv, AuthContextUser, requireRole } from '../middleware/auth.middleware.js';
@@ -468,5 +468,154 @@ masterRouter.delete('/users/:id', requireRole('ADMIN'), async (c) => {
   } catch (err) {
     console.error('[Delete User Error]:', err);
     return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal menghapus pengguna' } }, 500);
+  }
+});
+
+// =============================================================================
+// BOOTH ASSIGNMENTS (PENUGASAN SHIFT BOOTH)
+// =============================================================================
+
+masterRouter.get('/booth-assignments', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION'), async (c) => {
+  try {
+    const dateQuery = c.req.query('date');
+    const boothIdQuery = c.req.query('boothId');
+
+    const dbList = await db
+      .select({
+        id: schema.boothAssignments.id,
+        boothId: schema.boothAssignments.boothId,
+        boothName: schema.booths.name,
+        boothAddress: schema.booths.address,
+        userId: schema.boothAssignments.userId,
+        userName: schema.users.name,
+        userEmail: schema.users.email,
+        assignmentDate: schema.boothAssignments.assignmentDate,
+        createdAt: schema.boothAssignments.createdAt,
+      })
+      .from(schema.boothAssignments)
+      .innerJoin(schema.booths, eq(schema.boothAssignments.boothId, schema.booths.id))
+      .innerJoin(schema.users, eq(schema.boothAssignments.userId, schema.users.id))
+      .orderBy(desc(schema.boothAssignments.assignmentDate), desc(schema.boothAssignments.createdAt));
+
+    let filtered = dbList;
+    if (dateQuery) {
+      filtered = filtered.filter((a) => a.assignmentDate === dateQuery);
+    }
+    if (boothIdQuery) {
+      filtered = filtered.filter((a) => a.boothId === boothIdQuery);
+    }
+
+    const formatted = filtered.map((a) => ({
+      id: a.id,
+      date: a.assignmentDate,
+      shiftType: 'PAGI',
+      boothId: a.boothId,
+      boothName: a.boothName,
+      userId: a.userId,
+      userName: `${a.userName} (${a.userEmail})`,
+      assignedBy: 'Administrator',
+      status: 'OPEN',
+    }));
+
+    return c.json({ success: true, data: formatted });
+  } catch (err) {
+    console.error('[Get Booth Assignments Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal memuat jadwal penugasan shift' } }, 500);
+  }
+});
+
+masterRouter.post('/booth-assignments', requireRole('ADMIN'), async (c) => {
+  try {
+    const rawBody = await c.req.json();
+    const { boothId, userId, date } = rawBody;
+    const currentUser = c.get('user') as AuthContextUser;
+
+    if (!boothId) {
+      return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Pilih booth penugasan' } }, 400);
+    }
+    if (!userId) {
+      return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Pilih staf attendant' } }, 400);
+    }
+    if (!date) {
+      return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Tanggal penugasan wajib diisi' } }, 400);
+    }
+
+    // Cek booth aktif
+    const booth = await db.query.booths.findFirst({
+      where: eq(schema.booths.id, boothId),
+    });
+    if (!booth) {
+      return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Booth tidak ditemukan' } }, 404);
+    }
+
+    // Validasi aturan: 1 Booth tidak boleh memiliki 2 penugasan pada tanggal yang sama
+    const existingBoothAssignment = await db.query.boothAssignments.findFirst({
+      where: and(
+        eq(schema.boothAssignments.boothId, boothId),
+        eq(schema.boothAssignments.assignmentDate, date)
+      ),
+    });
+    if (existingBoothAssignment) {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'BOOTH_ALREADY_ASSIGNED',
+            message: `Akses Ditolak: Booth "${booth.name}" sudah memiliki penugasan pada tanggal ${date}. Tidak boleh ada 2 shift di satu booth yang sama.`,
+          },
+        },
+        400
+      );
+    }
+
+    // Validasi aturan: 1 Staf tidak boleh bertugas di 2 booth berbeda pada tanggal yang sama
+    const existingUserAssignment = await db.query.boothAssignments.findFirst({
+      where: and(
+        eq(schema.boothAssignments.userId, userId),
+        eq(schema.boothAssignments.assignmentDate, date)
+      ),
+    });
+    if (existingUserAssignment) {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'USER_ALREADY_ASSIGNED',
+            message: `Staf ini sudah memiliki jadwal penugasan booth lain pada tanggal ${date}.`,
+          },
+        },
+        400
+      );
+    }
+
+    const [newAssignment] = await db
+      .insert(schema.boothAssignments)
+      .values({
+        boothId,
+        userId,
+        assignmentDate: date,
+        createdBy: currentUser.id,
+      })
+      .returning();
+
+    return c.json({ success: true, data: newAssignment }, 201);
+  } catch (err) {
+    console.error('[Create Booth Assignment Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal membuat penugasan shift' } }, 500);
+  }
+});
+
+masterRouter.delete('/booth-assignments/:id', requireRole('ADMIN'), async (c) => {
+  try {
+    const id = c.req.param('id');
+    if (!id) {
+      return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'ID penugasan wajib disertakan' } }, 400);
+    }
+
+    await db.delete(schema.boothAssignments).where(eq(schema.boothAssignments.id, id));
+    return c.json({ success: true, message: 'Penugasan shift berhasil dihapus' });
+  } catch (err) {
+    console.error('[Delete Booth Assignment Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal menghapus penugasan shift' } }, 500);
   }
 });
