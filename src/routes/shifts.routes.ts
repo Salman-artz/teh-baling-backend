@@ -159,6 +159,13 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
       return c.json({ success: true, data: updated });
     }
 
+    const assignment = await db.query.boothAssignments.findFirst({
+      where: and(
+        eq(schema.boothAssignments.userId, user.id),
+        eq(schema.boothAssignments.assignmentDate, today)
+      ),
+    });
+
     const boothId = assignment?.boothId;
     if (!boothId) {
       return c.json(

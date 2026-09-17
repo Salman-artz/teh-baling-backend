@@ -10,11 +10,40 @@ const productionReportCreateSchema = z.object({
   notes: z.string().trim().optional().nullable(),
 });
 
+function isProductionOperatingHours(): boolean {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jakarta',
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false,
+  }).formatToParts(new Date());
+
+  const hour = parseInt(parts.find((p) => p.type === 'hour')?.value || '0', 10);
+  const minute = parseInt(parts.find((p) => p.type === 'minute')?.value || '0', 10);
+  const totalMinutes = hour * 60 + minute;
+
+  // 05:00 WIB (300 mins) to 21:00 WIB (1260 mins)
+  return totalMinutes >= 5 * 60 && totalMinutes <= 21 * 60;
+}
+
 export const productionRouter = new Hono<AppEnv>();
 
 // POST /production-reports
 productionRouter.post('/production-reports', requireRole('PRODUCTION'), async (c) => {
   try {
+    if (!isProductionOperatingHours()) {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'OUTSIDE_OPERATING_HOURS',
+            message: 'Akses Ditolak: Penginputan laporan memasak teh hanya dapat dilakukan pada jam operasional 05:00 - 21:00 WIB',
+          },
+        },
+        403
+      );
+    }
+
     const user = c.get('user') as AuthContextUser;
     const rawBody = await c.req.json();
     const parseResult = productionReportCreateSchema.safeParse(rawBody);
