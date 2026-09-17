@@ -39,6 +39,9 @@ importers:
       '@types/bcryptjs':
         specifier: ^2.4.6
         version: 2.4.6
+      '@types/node':
+        specifier: ^20.14.0
+        version: 20.19.43
       drizzle-kit:
         specifier: ^0.20.18
         version: 0.20.18
@@ -1979,7 +1982,6 @@ snapshots:
   '@types/node@20.19.43':
     dependencies:
       undici-types: 6.21.0
-    optional: true
 
   '@vitest/expect@2.1.9':
     dependencies:
@@ -2713,8 +2715,7 @@ snapshots:
 
   typescript@5.9.3: {}
 
-  undici-types@6.21.0:
-    optional: true
+  undici-types@6.21.0: {}
 
   unzipper@0.10.14:
     dependencies:
