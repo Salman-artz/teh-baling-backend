@@ -126,6 +126,7 @@ shiftsRouter.post('/daily-reports/start', requireRole('BOOTH_ATTENDANT'), async 
         boothId: targetBoothId,
         attendantId: user.id,
         reportDate: today,
+        shiftType: assignment?.shiftType || 'PAGI',
         cashModal,
         gpsLatStart: gpsLatitude !== undefined && gpsLatitude !== null ? String(gpsLatitude) : null,
         gpsLngStart: gpsLongitude !== undefined && gpsLongitude !== null ? String(gpsLongitude) : null,

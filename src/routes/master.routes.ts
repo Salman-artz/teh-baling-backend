@@ -660,6 +660,7 @@ masterRouter.get('/booth-assignments', requireRole('ADMIN', 'BOOTH_ATTENDANT', '
         userName: schema.users.name,
         userEmail: schema.users.email,
         assignmentDate: schema.boothAssignments.assignmentDate,
+        shiftType: schema.boothAssignments.shiftType,
         createdAt: schema.boothAssignments.createdAt,
       })
       .from(schema.boothAssignments)
@@ -678,7 +679,7 @@ masterRouter.get('/booth-assignments', requireRole('ADMIN', 'BOOTH_ATTENDANT', '
     const formatted = filtered.map((a) => ({
       id: a.id,
       date: a.assignmentDate,
-      shiftType: 'PAGI',
+      shiftType: a.shiftType || 'PAGI',
       boothId: a.boothId,
       boothName: a.boothName,
       boothAddress: a.boothAddress || 'Alamat Booth',
@@ -701,7 +702,7 @@ masterRouter.get('/booth-assignments', requireRole('ADMIN', 'BOOTH_ATTENDANT', '
 masterRouter.post('/booth-assignments', requireRole('ADMIN'), async (c) => {
   try {
     const rawBody = await c.req.json();
-    const { boothId, userId, date } = rawBody;
+    const { boothId, userId, date, shiftType } = rawBody;
     const currentUser = c.get('user') as AuthContextUser;
 
     if (!boothId) {
@@ -713,6 +714,8 @@ masterRouter.post('/booth-assignments', requireRole('ADMIN'), async (c) => {
     if (!date) {
       return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Tanggal penugasan wajib diisi' } }, 400);
     }
+
+    const validShiftType = shiftType === 'SORE' ? 'SORE' : 'PAGI';
 
     // Cek booth aktif
     const booth = await db.query.booths.findFirst({
@@ -788,6 +791,7 @@ masterRouter.post('/booth-assignments', requireRole('ADMIN'), async (c) => {
         boothId,
         userId,
         assignmentDate: date,
+        shiftType: validShiftType,
         createdBy: currentUser.id,
       })
       .returning();

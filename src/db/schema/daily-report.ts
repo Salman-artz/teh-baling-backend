@@ -1,4 +1,4 @@
-import { pgTable, uuid, date, integer, text, numeric, timestamp, pgEnum, unique } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, date, integer, text, numeric, timestamp, varchar, pgEnum, unique } from 'drizzle-orm/pg-core';
 import { booths } from './booth.js';
 import { users } from './user.js';
 export const statusEnum = pgEnum('report_status', ['OPEN', 'CLOSED']);
@@ -7,6 +7,7 @@ export const dailyReports = pgTable('daily_reports', {
   boothId: uuid('booth_id').references(() => booths.id, { onDelete: 'restrict' }).notNull(),
   attendantId: uuid('attendant_id').references(() => users.id, { onDelete: 'restrict' }).notNull(),
   reportDate: date('report_date').notNull().defaultNow(),
+  shiftType: varchar('shift_type', { length: 10 }).default('PAGI').notNull(),
   cashModal: integer('cash_modal').notNull().default(0),
   cashFinal: integer('cash_final'),
   notes: text('notes'),
