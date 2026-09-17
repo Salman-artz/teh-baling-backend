@@ -87,101 +87,114 @@ summaryRouter.get('/dashboard/chart', requireRole('ADMIN'), async (c) => {
     const boothId = c.req.query('boothId') || 'ALL';
     const period = c.req.query('period') || 'hourly';
 
-    if (period === 'hourly') {
-      const rawHourly = [
-        { time: '08:00', alunAlun: 150000, unesa: 120000, gubeng: 90000, cups: 25 },
-        { time: '10:00', alunAlun: 280000, unesa: 240000, gubeng: 180000, cups: 48 },
-        { time: '12:00', alunAlun: 450000, unesa: 380000, gubeng: 310000, cups: 78 },
-        { time: '14:00', alunAlun: 320000, unesa: 300000, gubeng: 220000, cups: 58 },
-        { time: '16:00', alunAlun: 380000, unesa: 320000, gubeng: 290000, cups: 64 },
-        { time: '18:00', alunAlun: 270000, unesa: 240000, gubeng: 190000, cups: 47 },
-      ];
+    const allBooths = await db.select().from(schema.booths).where(eq(schema.booths.isActive, true));
+    const allReports = await db.select().from(schema.dailyReports);
 
-      const filtered = rawHourly.map((row) => {
-        if (boothId === 'b1111111-1111-1111-1111-111111111111') {
-          return { label: row.time, revenue: row.alunAlun, cups: Math.round(row.alunAlun / 11000) };
+    if (period === 'hourly') {
+      const timeSlots = ['08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00'];
+      const today: string = new Date().toISOString().split('T')[0]!;
+      const todayReports = allReports.filter((r) => r.reportDate === today);
+
+      const data = timeSlots.map((slot) => {
+        let totalRevenue = 0;
+        let totalCups = 0;
+
+        todayReports.forEach((r) => {
+          if (boothId !== 'ALL' && r.boothId !== boothId) return;
+          const rev = Math.max(0, (r.cashFinal || 0) - (r.cashModal || 0));
+          totalRevenue += rev;
+          totalCups += Math.round(rev / 10000);
+        });
+
+        // If specific booth
+        if (boothId !== 'ALL') {
+          const boothRep = todayReports.find((r) => r.boothId === boothId);
+          const rev = boothRep ? Math.max(0, (boothRep.cashFinal || 0) - (boothRep.cashModal || 0)) : 0;
+          return {
+            label: slot,
+            revenue: rev > 0 ? Math.round(rev / timeSlots.length) : 0,
+            cups: rev > 0 ? Math.round(rev / (10000 * timeSlots.length)) : 0,
+          };
         }
-        if (boothId === 'b2222222-2222-2222-2222-222222222222') {
-          return { label: row.time, revenue: row.unesa, cups: Math.round(row.unesa / 11000) };
-        }
-        if (boothId === 'b3333333-3333-3333-3333-333333333333') {
-          return { label: row.time, revenue: row.gubeng, cups: Math.round(row.gubeng / 11000) };
-        }
+
         return {
-          label: row.time,
-          alunAlun: row.alunAlun,
-          unesa: row.unesa,
-          gubeng: row.gubeng,
-          totalRevenue: row.alunAlun + row.unesa + row.gubeng,
-          cups: row.cups,
+          label: slot,
+          totalRevenue: totalRevenue > 0 ? Math.round(totalRevenue / timeSlots.length) : 0,
+          cups: totalCups > 0 ? Math.round(totalCups / timeSlots.length) : 0,
         };
       });
 
-      return c.json({ success: true, period, boothId, data: filtered });
+      return c.json({ success: true, period, boothId, data });
     }
 
     if (period === 'daily') {
-      const rawDaily = [
-        { label: 'Senin', alunAlun: 1400000, unesa: 1200000, gubeng: 950000, cups: 250 },
-        { label: 'Selasa', alunAlun: 1550000, unesa: 1350000, gubeng: 1050000, cups: 280 },
-        { label: 'Rabu', alunAlun: 1600000, unesa: 1450000, gubeng: 1100000, cups: 300 },
-        { label: 'Kamis', alunAlun: 1720000, unesa: 1500000, gubeng: 1180000, cups: 310 },
-        { label: 'Jumat', alunAlun: 1950000, unesa: 1700000, gubeng: 1350000, cups: 360 },
-        { label: 'Sabtu', alunAlun: 2400000, unesa: 2100000, gubeng: 1650000, cups: 440 },
-        { label: 'Minggu', alunAlun: 1850000, unesa: 1600000, gubeng: 1250000, cups: 320 },
-      ];
+      const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+      const now = new Date();
+      const last7Days: { label: string; dateStr: string }[] = [];
 
-      const filtered = rawDaily.map((row) => {
-        if (boothId === 'b1111111-1111-1111-1111-111111111111') {
-          return { label: row.label, revenue: row.alunAlun, cups: Math.round(row.alunAlun / 11000) };
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(now);
+        d.setDate(d.getDate() - i);
+        const dateStr = d.toISOString().split('T')[0]!;
+        const dayLabel = days[d.getDay()] || 'Hari';
+        last7Days.push({ label: dayLabel, dateStr });
+      }
+
+      const data = last7Days.map(({ label, dateStr }) => {
+        const dayReports = allReports.filter((r) => r.reportDate === dateStr);
+        let revenue = 0;
+        let cups = 0;
+
+        dayReports.forEach((r) => {
+          if (boothId !== 'ALL' && r.boothId !== boothId) return;
+          const rev = Math.max(0, (r.cashFinal || 0) - (r.cashModal || 0));
+          revenue += rev;
+          cups += Math.round(rev / 10000);
+        });
+
+        if (boothId !== 'ALL') {
+          return { label, revenue, cups };
         }
-        if (boothId === 'b2222222-2222-2222-2222-222222222222') {
-          return { label: row.label, revenue: row.unesa, cups: Math.round(row.unesa / 11000) };
-        }
-        if (boothId === 'b3333333-3333-3333-3333-333333333333') {
-          return { label: row.label, revenue: row.gubeng, cups: Math.round(row.gubeng / 11000) };
-        }
+
         return {
-          label: row.label,
-          alunAlun: row.alunAlun,
-          unesa: row.unesa,
-          gubeng: row.gubeng,
-          totalRevenue: row.alunAlun + row.unesa + row.gubeng,
-          cups: row.cups,
+          label,
+          totalRevenue: revenue,
+          cups,
         };
       });
 
-      return c.json({ success: true, period, boothId, data: filtered });
+      return c.json({ success: true, period, boothId, data });
     }
 
-    const rawMonthly = [
-      { label: 'Minggu 1', alunAlun: 10500000, unesa: 9200000, gubeng: 7100000, cups: 2100 },
-      { label: 'Minggu 2', alunAlun: 11800000, unesa: 10400000, gubeng: 8200000, cups: 2400 },
-      { label: 'Minggu 3', alunAlun: 12400000, unesa: 11100000, gubeng: 8900000, cups: 2600 },
-      { label: 'Minggu 4', alunAlun: 13100000, unesa: 11800000, gubeng: 9400000, cups: 2800 },
-    ];
+    // monthly
+    const weeks = ['Minggu 1', 'Minggu 2', 'Minggu 3', 'Minggu 4'];
+    const data = weeks.map((label) => {
+      let revenue = 0;
+      let cups = 0;
 
-    const filtered = rawMonthly.map((row) => {
-      if (boothId === 'b1111111-1111-1111-1111-111111111111') {
-        return { label: row.label, revenue: row.alunAlun, cups: Math.round(row.alunAlun / 11000) };
+      allReports.forEach((r) => {
+        if (boothId !== 'ALL' && r.boothId !== boothId) return;
+        const rev = Math.max(0, (r.cashFinal || 0) - (r.cashModal || 0));
+        revenue += rev;
+        cups += Math.round(rev / 10000);
+      });
+
+      if (boothId !== 'ALL') {
+        return {
+          label,
+          revenue: revenue > 0 ? Math.round(revenue / 4) : 0,
+          cups: cups > 0 ? Math.round(cups / 4) : 0,
+        };
       }
-      if (boothId === 'b2222222-2222-2222-2222-222222222222') {
-        return { label: row.label, revenue: row.unesa, cups: Math.round(row.unesa / 11000) };
-      }
-      if (boothId === 'b3333333-3333-3333-3333-333333333333') {
-        return { label: row.label, revenue: row.gubeng, cups: Math.round(row.gubeng / 11000) };
-      }
+
       return {
-        label: row.label,
-        alunAlun: row.alunAlun,
-        unesa: row.unesa,
-        gubeng: row.gubeng,
-        totalRevenue: row.alunAlun + row.unesa + row.gubeng,
-        cups: row.cups,
+        label,
+        totalRevenue: revenue > 0 ? Math.round(revenue / 4) : 0,
+        cups: cups > 0 ? Math.round(cups / 4) : 0,
       };
     });
 
-    return c.json({ success: true, period, boothId, data: filtered });
+    return c.json({ success: true, period, boothId, data });
   } catch (err) {
     console.error('[Dashboard Chart Error]:', err);
     return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal memuat data grafik' } }, 500);

@@ -450,7 +450,8 @@ masterRouter.get('/booths/resolve-gmaps', async (c) => {
 
 masterRouter.get('/users', requireRole('ADMIN'), async (c) => {
   try {
-    const list = await db
+    const roleQuery = c.req.query('role');
+    let list = await db
       .select({
         id: schema.users.id,
         name: schema.users.name,
@@ -461,6 +462,11 @@ masterRouter.get('/users', requireRole('ADMIN'), async (c) => {
       })
       .from(schema.users)
       .orderBy(desc(schema.users.createdAt));
+
+    if (roleQuery && roleQuery !== 'ALL') {
+      list = list.filter((u) => u.role === roleQuery);
+    }
+
     return c.json({ success: true, data: list });
   } catch (err) {
     console.error('[Get Users Error]:', err);
@@ -714,6 +720,26 @@ masterRouter.post('/booth-assignments', requireRole('ADMIN'), async (c) => {
     });
     if (!booth) {
       return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Booth tidak ditemukan' } }, 404);
+    }
+
+    // Cek staf penugasan dan perannya
+    const targetUser = await db.query.users.findFirst({
+      where: eq(schema.users.id, userId),
+    });
+    if (!targetUser) {
+      return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Staf pengguna tidak ditemukan' } }, 404);
+    }
+    if (targetUser.role !== 'BOOTH_ATTENDANT') {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'INVALID_ROLE',
+            message: `Akses Ditolak: Hanya staf stand booth (BOOTH_ATTENDANT) yang dapat dijadwalkan shift. Akun "${targetUser.name}" adalah ${targetUser.role === 'ADMIN' ? 'Administrator' : 'Staf Produksi Dapur'} (Admin & Produksi tidak bisa dijadwalkan shift booth).`,
+          },
+        },
+        400
+      );
     }
 
     // Validasi aturan: 1 Booth tidak boleh memiliki 2 penugasan pada tanggal yang sama
