@@ -104,7 +104,15 @@ masterRouter.get('/cup-types', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTI
 
 masterRouter.get('/booths', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION'), async (c) => {
   try {
-    const list = await db.select().from(schema.booths).orderBy(desc(schema.booths.createdAt));
+    const status = c.req.query('status');
+    let list;
+    if (status === 'active') {
+      list = await db.select().from(schema.booths).where(eq(schema.booths.isActive, true)).orderBy(desc(schema.booths.createdAt));
+    } else if (status === 'inactive') {
+      list = await db.select().from(schema.booths).where(eq(schema.booths.isActive, false)).orderBy(desc(schema.booths.createdAt));
+    } else {
+      list = await db.select().from(schema.booths).orderBy(desc(schema.booths.createdAt));
+    }
     return c.json({ success: true, data: list });
   } catch (err) {
     console.error('[Get Booths Error]:', err);
@@ -115,7 +123,7 @@ masterRouter.get('/booths', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION'
 masterRouter.post('/booths', requireRole('ADMIN'), async (c) => {
   try {
     const rawBody = await c.req.json();
-    const { name, address, latitude, longitude } = rawBody;
+    const { name, address, latitude, longitude, isActive } = rawBody;
 
     if (!name || !name.trim()) {
       return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Nama booth wajib diisi' } }, 400);
@@ -131,7 +139,7 @@ masterRouter.post('/booths', requireRole('ADMIN'), async (c) => {
         address: address.trim(),
         latitude: latitude ? String(latitude) : '-7.2575000',
         longitude: longitude ? String(longitude) : '112.7521000',
-        isActive: true,
+        isActive: isActive !== undefined ? Boolean(isActive) : true,
       })
       .returning();
 
