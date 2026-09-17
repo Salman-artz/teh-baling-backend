@@ -379,17 +379,31 @@ exportRouter.get('/export/shift-assignments', requireRole('ADMIN'), async (c) =>
       assignments = assignments.filter((a) => a.boothId === boothId);
     }
 
-    const rows = assignments.map((item, index) => ({
-      no: index + 1,
-      date: item.assignmentDate,
-      boothName: item.boothName || 'Booth Teh Baling',
-      boothAddress: item.boothAddress || '-',
-      staffName: item.userName || 'Staf Penjaga',
-      staffEmail: item.userEmail || '-',
-      shift: 'Shift Full (09:00 - 21:00)',
-      status: 'Aktif Bertugas',
-      assignedBy: 'Pak Budi (Owner / Admin)',
-    }));
+    const rows = assignments.map((item, index) => {
+      let statusStr = 'Aktif Bertugas';
+      const shiftDate = item.assignmentDate;
+      const todayStr = new Date().toISOString().split('T')[0]!;
+      if (shiftDate < todayStr) {
+        statusStr = 'Selesai (Terlewat)';
+      } else if (shiftDate === todayStr) {
+        const currentHour = new Date().getHours();
+        statusStr = currentHour >= 21 ? 'Selesai (Shift Berakhir)' : 'Sedang Beroperasi';
+      } else {
+        statusStr = 'Mendatang (Terjadwal)';
+      }
+
+      return {
+        no: index + 1,
+        date: item.assignmentDate,
+        boothName: item.boothName || 'Booth Teh Baling',
+        boothAddress: item.boothAddress || '-',
+        staffName: item.userName || 'Staf Penjaga',
+        staffEmail: item.userEmail || '-',
+        shift: 'Shift Full (09:00 - 21:00)',
+        status: statusStr,
+        assignedBy: 'Pak Budi (Owner / Admin)',
+      };
+    });
 
     const workbook = createStyledExcelWorkbook({
       sheetName: 'Jadwal Shift Staf',
