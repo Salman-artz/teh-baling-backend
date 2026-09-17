@@ -72,20 +72,13 @@ shiftsRouter.post('/daily-reports/start', requireRole('BOOTH_ATTENDANT'), async 
     let targetBoothId: string | null = assignment?.boothId || null;
 
     if (!targetBoothId) {
-      const defaultBooth = await db.query.booths.findFirst({
-        where: eq(schema.booths.isActive, true),
-      });
-      if (defaultBooth) {
-        targetBoothId = defaultBooth.id;
-      } else {
-        return c.json(
-          {
-            success: false,
-            error: { code: 'NO_BOOTH_ASSIGNMENT', message: 'Tidak ada booth yang tersedia untuk shift Anda' },
-          },
-          400
-        );
-      }
+      return c.json(
+        {
+          success: false,
+          error: { code: 'NO_BOOTH_ASSIGNMENT', message: 'Akses Ditolak: Anda tidak memiliki jadwal penugasan shift pada hari ini' },
+        },
+        403
+      );
     }
 
     const [report] = await db
@@ -166,20 +159,15 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
       return c.json({ success: true, data: updated });
     }
 
-    const assignment = await db.query.boothAssignments.findFirst({
-      where: and(
-        eq(schema.boothAssignments.userId, user.id),
-        eq(schema.boothAssignments.assignmentDate, today)
-      ),
-    });
-
-    const defaultBooth = await db.query.booths.findFirst({
-      where: eq(schema.booths.isActive, true),
-    });
-
-    const boothId = assignment?.boothId || defaultBooth?.id;
+    const boothId = assignment?.boothId;
     if (!boothId) {
-      return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Laporan shift belum dimulai' } }, 400);
+      return c.json(
+        {
+          success: false,
+          error: { code: 'NO_BOOTH_ASSIGNMENT', message: 'Akses Ditolak: Anda tidak memiliki jadwal penugasan shift pada hari ini' },
+        },
+        403
+      );
     }
 
     const [created] = await db
