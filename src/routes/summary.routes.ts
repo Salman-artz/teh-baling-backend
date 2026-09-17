@@ -1,4 +1,7 @@
 import { Hono } from 'hono';
+import { eq, desc, and } from 'drizzle-orm';
+import { db } from '../db/index.js';
+import * as schema from '../db/schema/index.js';
 import { AppEnv, requireRole } from '../middleware/auth.middleware.js';
 
 export const summaryRouter = new Hono<AppEnv>();
@@ -6,30 +9,70 @@ export const summaryRouter = new Hono<AppEnv>();
 // GET /dashboard/today
 summaryRouter.get('/dashboard/today', requireRole('ADMIN'), async (c) => {
   try {
+    const today: string = new Date().toISOString().split('T')[0]!;
+
+    const allBooths = await db
+      .select()
+      .from(schema.booths)
+      .where(eq(schema.booths.isActive, true))
+      .orderBy(desc(schema.booths.createdAt));
+
+    const todayReports = await db
+      .select({
+        id: schema.dailyReports.id,
+        boothId: schema.dailyReports.boothId,
+        attendantId: schema.dailyReports.attendantId,
+        cashModal: schema.dailyReports.cashModal,
+        cashFinal: schema.dailyReports.cashFinal,
+        status: schema.dailyReports.status,
+        attendantName: schema.users.name,
+      })
+      .from(schema.dailyReports)
+      .leftJoin(schema.users, eq(schema.dailyReports.attendantId, schema.users.id))
+      .where(eq(schema.dailyReports.reportDate, today));
+
+    const todayAssignments = await db
+      .select({
+        boothId: schema.boothAssignments.boothId,
+        userName: schema.users.name,
+      })
+      .from(schema.boothAssignments)
+      .leftJoin(schema.users, eq(schema.boothAssignments.userId, schema.users.id))
+      .where(eq(schema.boothAssignments.assignmentDate, today));
+
+    let totalRevenue = 0;
+    let totalCupsSold = 0;
+
+    const boothsData = allBooths.map((b) => {
+      const rep = todayReports.find((r) => r.boothId === b.id);
+      const assign = todayAssignments.find((a) => a.boothId === b.id);
+
+      const cashModal = rep?.cashModal || 0;
+      const cashFinal = rep?.cashFinal || 0;
+      const revenue = Math.max(0, cashFinal - cashModal);
+      const variance = 0;
+
+      totalRevenue += revenue;
+      const cups = Math.round(revenue / 10000);
+      totalCupsSold += cups;
+
+      return {
+        id: b.id,
+        name: b.name,
+        attendantName: rep?.attendantName || assign?.userName || 'Belum Ditugaskan',
+        status: rep?.status === 'CLOSED' ? 'Selesai' : rep?.status === 'OPEN' ? 'Beroperasi' : 'Belum Buka',
+        revenue,
+        variance,
+      };
+    });
+
     return c.json({
       success: true,
       data: {
-        totalRevenue: 3450000,
-        totalCupsSold: 320,
-        activeBooths: 2,
-        booths: [
-          {
-            id: 'b1111111-1111-1111-1111-111111111111',
-            name: 'Booth Alun-Alun Kota',
-            attendantName: 'Rina',
-            status: 'Beroperasi',
-            revenue: 1850000,
-            variance: 0,
-          },
-          {
-            id: 'b2222222-2222-2222-2222-222222222222',
-            name: 'Booth Kampus UNESA',
-            attendantName: 'Siti',
-            status: 'Beroperasi',
-            revenue: 1600000,
-            variance: -5000,
-          },
-        ],
+        totalRevenue,
+        totalCupsSold,
+        activeBooths: allBooths.length,
+        booths: boothsData,
       },
     });
   } catch (err) {
@@ -142,5 +185,60 @@ summaryRouter.get('/dashboard/chart', requireRole('ADMIN'), async (c) => {
   } catch (err) {
     console.error('[Dashboard Chart Error]:', err);
     return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal memuat data grafik' } }, 500);
+  }
+});
+
+// GET /dashboard/summary-table
+summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN'), async (c) => {
+  try {
+    const fromDate = c.req.query('from');
+    const toDate = c.req.query('to');
+    const boothId = c.req.query('boothId');
+
+    const dbReports = await db
+      .select({
+        id: schema.dailyReports.id,
+        date: schema.dailyReports.reportDate,
+        boothId: schema.dailyReports.boothId,
+        boothName: schema.booths.name,
+        cashModal: schema.dailyReports.cashModal,
+        cashFinal: schema.dailyReports.cashFinal,
+        status: schema.dailyReports.status,
+      })
+      .from(schema.dailyReports)
+      .leftJoin(schema.booths, eq(schema.dailyReports.boothId, schema.booths.id))
+      .orderBy(desc(schema.dailyReports.reportDate), desc(schema.dailyReports.createdAt));
+
+    let filtered = dbReports;
+    if (fromDate) {
+      filtered = filtered.filter((r) => r.date >= fromDate);
+    }
+    if (toDate) {
+      filtered = filtered.filter((r) => r.date <= toDate);
+    }
+    if (boothId && boothId !== 'ALL') {
+      filtered = filtered.filter((r) => r.boothId === boothId);
+    }
+
+    const formatted = filtered.map((r) => {
+      const modal = r.cashModal || 0;
+      const finalCash = r.cashFinal !== null ? r.cashFinal : modal;
+      const revenue = Math.max(0, finalCash - modal);
+      const cups = Math.round(revenue / 10000);
+      return {
+        id: r.id,
+        date: r.date,
+        boothName: r.boothName || 'Booth',
+        revenue,
+        cupsSold: cups,
+        variance: 0,
+        status: r.status,
+      };
+    });
+
+    return c.json({ success: true, data: formatted });
+  } catch (err) {
+    console.error('[Summary Table Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal memuat rekap penjualan' } }, 500);
   }
 });

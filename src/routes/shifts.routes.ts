@@ -303,17 +303,22 @@ shiftsRouter.get('/daily-reports/my', requireRole('BOOTH_ATTENDANT'), async (c) 
       .where(eq(schema.dailyReports.attendantId, user.id))
       .orderBy(desc(schema.dailyReports.createdAt));
 
-    const formatted = reports.map((r) => ({
-      id: r.id,
-      date: r.date,
-      boothName: r.boothName || 'Booth Alun-Alun Kota',
-      modal: r.cashModal || 50000,
-      cashFinal: r.cashFinal || 1900000,
-      revenue: (r.cashFinal || 1900000) - (r.cashModal || 50000),
-      cupsSold: 170,
-      variance: 0,
-      status: r.status || 'CLOSED',
-    }));
+    const formatted = reports.map((r) => {
+      const modal = r.cashModal || 0;
+      const finalCash = r.cashFinal !== null ? r.cashFinal : null;
+      const revenue = finalCash !== null ? Math.max(0, finalCash - modal) : 0;
+      return {
+        id: r.id,
+        date: r.date,
+        boothName: r.boothName || 'Booth',
+        modal,
+        cashFinal: finalCash !== null ? finalCash : 0,
+        revenue,
+        cupsSold: 0,
+        variance: 0,
+        status: r.status || 'OPEN',
+      };
+    });
 
     return c.json({ success: true, data: formatted });
   } catch (err) {

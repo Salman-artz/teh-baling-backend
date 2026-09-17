@@ -70,17 +70,141 @@ masterRouter.post('/tea-series', requireRole('ADMIN'), async (c) => {
   }
 });
 
+masterRouter.patch('/tea-series/:id', requireRole('ADMIN'), async (c) => {
+  try {
+    const id = c.req.param('id');
+    if (!id) {
+      return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'ID series wajib disertakan' } }, 400);
+    }
+    const { name, description, isActive } = await c.req.json();
+    const updateData: any = { updatedAt: new Date() };
+    if (name !== undefined) updateData.name = name.trim();
+    if (description !== undefined) updateData.description = description ? description.trim() : null;
+    if (isActive !== undefined) updateData.isActive = Boolean(isActive);
+
+    const [updated] = await db
+      .update(schema.teaSeries)
+      .set(updateData)
+      .where(eq(schema.teaSeries.id, id))
+      .returning();
+    return c.json({ success: true, data: updated });
+  } catch (err) {
+    console.error('[Update Tea Series Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal mengubah series teh' } }, 500);
+  }
+});
+
+masterRouter.delete('/tea-series/:id', requireRole('ADMIN'), async (c) => {
+  try {
+    const id = c.req.param('id');
+    if (!id) {
+      return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'ID series wajib disertakan' } }, 400);
+    }
+    try {
+      await db.delete(schema.teaSeries).where(eq(schema.teaSeries.id, id));
+    } catch {
+      await db.update(schema.teaSeries).set({ isActive: false, updatedAt: new Date() }).where(eq(schema.teaSeries.id, id));
+    }
+    return c.json({ success: true, message: 'Series teh berhasil dihapus' });
+  } catch (err) {
+    console.error('[Delete Tea Series Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal menghapus series teh' } }, 500);
+  }
+});
+
 // =============================================================================
 // TEA PRODUCTS
 // =============================================================================
 
 masterRouter.get('/tea-products', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION'), async (c) => {
   try {
-    const list = await db.select().from(schema.teaProducts).where(eq(schema.teaProducts.isActive, true));
+    const list = await db
+      .select({
+        id: schema.teaProducts.id,
+        name: schema.teaProducts.name,
+        seriesId: schema.teaProducts.seriesId,
+        seriesName: schema.teaSeries.name,
+        description: schema.teaProducts.description,
+        isActive: schema.teaProducts.isActive,
+        createdAt: schema.teaProducts.createdAt,
+      })
+      .from(schema.teaProducts)
+      .leftJoin(schema.teaSeries, eq(schema.teaProducts.seriesId, schema.teaSeries.id))
+      .where(eq(schema.teaProducts.isActive, true))
+      .orderBy(desc(schema.teaProducts.createdAt));
     return c.json({ success: true, data: list });
   } catch (err) {
     console.error('[Get Tea Products Error]:', err);
     return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal mengambil data produk teh' } }, 500);
+  }
+});
+
+masterRouter.post('/tea-products', requireRole('ADMIN'), async (c) => {
+  try {
+    const { name, seriesId, description } = await c.req.json();
+    if (!name || !name.trim()) {
+      return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Nama produk wajib diisi' } }, 400);
+    }
+    if (!seriesId) {
+      return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Pilih series teh' } }, 400);
+    }
+
+    const [created] = await db
+      .insert(schema.teaProducts)
+      .values({
+        name: name.trim(),
+        seriesId,
+        description: description ? description.trim() : null,
+      })
+      .returning();
+
+    return c.json({ success: true, data: created }, 201);
+  } catch (err) {
+    console.error('[Create Tea Product Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal menambahkan produk teh' } }, 500);
+  }
+});
+
+masterRouter.patch('/tea-products/:id', requireRole('ADMIN'), async (c) => {
+  try {
+    const id = c.req.param('id');
+    if (!id) {
+      return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'ID produk wajib disertakan' } }, 400);
+    }
+    const { name, seriesId, description, isActive } = await c.req.json();
+    const updateData: any = { updatedAt: new Date() };
+    if (name !== undefined) updateData.name = name.trim();
+    if (seriesId !== undefined) updateData.seriesId = seriesId;
+    if (description !== undefined) updateData.description = description ? description.trim() : null;
+    if (isActive !== undefined) updateData.isActive = Boolean(isActive);
+
+    const [updated] = await db
+      .update(schema.teaProducts)
+      .set(updateData)
+      .where(eq(schema.teaProducts.id, id))
+      .returning();
+    return c.json({ success: true, data: updated });
+  } catch (err) {
+    console.error('[Update Tea Product Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal mengubah produk teh' } }, 500);
+  }
+});
+
+masterRouter.delete('/tea-products/:id', requireRole('ADMIN'), async (c) => {
+  try {
+    const id = c.req.param('id');
+    if (!id) {
+      return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'ID produk wajib disertakan' } }, 400);
+    }
+    try {
+      await db.delete(schema.teaProducts).where(eq(schema.teaProducts.id, id));
+    } catch {
+      await db.update(schema.teaProducts).set({ isActive: false, updatedAt: new Date() }).where(eq(schema.teaProducts.id, id));
+    }
+    return c.json({ success: true, message: 'Produk teh berhasil dihapus' });
+  } catch (err) {
+    console.error('[Delete Tea Product Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal menghapus produk teh' } }, 500);
   }
 });
 
@@ -95,6 +219,44 @@ masterRouter.get('/cup-types', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTI
   } catch (err) {
     console.error('[Get Cup Types Error]:', err);
     return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal mengambil data tipe cup' } }, 500);
+  }
+});
+
+masterRouter.post('/cup-types', requireRole('ADMIN'), async (c) => {
+  try {
+    const { name, price } = await c.req.json();
+    if (!name || !name.trim()) {
+      return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Nama ukuran cup wajib diisi' } }, 400);
+    }
+    const [created] = await db
+      .insert(schema.cupTypes)
+      .values({
+        name: name.trim(),
+        price: typeof price === 'number' ? price : 10000,
+      })
+      .returning();
+    return c.json({ success: true, data: created }, 201);
+  } catch (err) {
+    console.error('[Create Cup Type Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal menambahkan ukuran cup' } }, 500);
+  }
+});
+
+masterRouter.delete('/cup-types/:id', requireRole('ADMIN'), async (c) => {
+  try {
+    const id = c.req.param('id');
+    if (!id) {
+      return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'ID cup wajib disertakan' } }, 400);
+    }
+    try {
+      await db.delete(schema.cupTypes).where(eq(schema.cupTypes.id, id));
+    } catch {
+      await db.update(schema.cupTypes).set({ isActive: false }).where(eq(schema.cupTypes.id, id));
+    }
+    return c.json({ success: true, message: 'Ukuran cup berhasil dihapus' });
+  } catch (err) {
+    console.error('[Delete Cup Type Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal menghapus ukuran cup' } }, 500);
   }
 });
 
@@ -486,6 +648,8 @@ masterRouter.get('/booth-assignments', requireRole('ADMIN', 'BOOTH_ATTENDANT', '
         boothId: schema.boothAssignments.boothId,
         boothName: schema.booths.name,
         boothAddress: schema.booths.address,
+        latitude: schema.booths.latitude,
+        longitude: schema.booths.longitude,
         userId: schema.boothAssignments.userId,
         userName: schema.users.name,
         userEmail: schema.users.email,
@@ -511,7 +675,11 @@ masterRouter.get('/booth-assignments', requireRole('ADMIN', 'BOOTH_ATTENDANT', '
       shiftType: 'PAGI',
       boothId: a.boothId,
       boothName: a.boothName,
+      boothAddress: a.boothAddress || 'Alamat Booth',
+      latitude: a.latitude ? parseFloat(a.latitude) : -7.2575,
+      longitude: a.longitude ? parseFloat(a.longitude) : 112.7521,
       userId: a.userId,
+      userEmail: a.userEmail,
       userName: `${a.userName} (${a.userEmail})`,
       assignedBy: 'Administrator',
       status: 'OPEN',

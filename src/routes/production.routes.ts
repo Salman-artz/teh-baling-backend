@@ -111,64 +111,12 @@ productionRouter.get('/production-reports', requireRole('ADMIN', 'PRODUCTION'), 
         id: r.id,
         date: r.reportDate,
         time: timeStr,
-        staffName: r.staffName ? `${r.staffName} (${r.staffEmail})` : 'Joko Produksi (joko@tehbaling.com)',
+        staffName: r.staffName ? `${r.staffName} (${r.staffEmail})` : 'Staf Dapur',
         liters: parseFloat(r.totalLiters) || 0,
-        notes: r.notes || 'Seduhan teh melati kualitas utama',
+        notes: r.notes || '-',
         status: 'Selesai Dimasak',
       };
     });
-
-    const defaultHistory = [
-      {
-        id: 'pr_seed_1',
-        date: '2026-09-16',
-        time: '08:30:15 WIB',
-        staffName: 'Joko Produksi (joko@tehbaling.com)',
-        liters: 150,
-        notes: 'Seduhan teh melati kualitas utama, kompor 1 & 2',
-        status: 'Selesai Dimasak',
-      },
-      {
-        id: 'pr_seed_2',
-        date: '2026-09-16',
-        time: '13:15:40 WIB',
-        staffName: 'Joko Produksi (joko@tehbaling.com)',
-        liters: 100,
-        notes: 'Penambahan stok siang persiapan jam ramai',
-        status: 'Selesai Dimasak',
-      },
-      {
-        id: 'pr_seed_3',
-        date: '2026-09-15',
-        time: '08:15:00 WIB',
-        staffName: 'Joko Produksi (joko@tehbaling.com)',
-        liters: 180,
-        notes: 'Seduhan teh melati super + gula cair asli',
-        status: 'Selesai Dimasak',
-      },
-      {
-        id: 'pr_seed_4',
-        date: '2026-09-15',
-        time: '14:00:22 WIB',
-        staffName: 'Joko Produksi (joko@tehbaling.com)',
-        liters: 120,
-        notes: 'Stok tambahan sore hari',
-        status: 'Selesai Dimasak',
-      },
-      {
-        id: 'pr_seed_5',
-        date: '2026-09-14',
-        time: '08:45:10 WIB',
-        staffName: 'Joko Produksi (joko@tehbaling.com)',
-        liters: 160,
-        notes: 'Seduhan teh melati fresh',
-        status: 'Selesai Dimasak',
-      },
-    ];
-
-    const dbKeys = new Set(formatted.map((f) => f.date + f.time));
-    const filteredSeed = defaultHistory.filter((s) => !dbKeys.has(s.date + s.time));
-    formatted = [...formatted, ...filteredSeed];
 
     if (fromDate) {
       formatted = formatted.filter((r) => r.date >= fromDate);
