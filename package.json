@@ -1,0 +1,35 @@
+{
+  "name": "@teh-baling/api",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "drizzle-kit push && node dist/index.js",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "db:seed": "tsx src/db/seed.ts",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.12.0",
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^17.4.2",
+    "drizzle-orm": "^0.33.0",
+    "exceljs": "^4.4.0",
+    "hono": "^4.5.0",
+    "jose": "^5.6.0",
+    "postgres": "^3.4.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "drizzle-kit": "^0.20.18",
+    "tsx": "^4.16.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
+  }
+}
