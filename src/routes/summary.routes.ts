@@ -40,6 +40,12 @@ summaryRouter.get('/dashboard/today', requireRole('ADMIN'), async (c) => {
       .leftJoin(schema.users, eq(schema.boothAssignments.userId, schema.users.id))
       .where(eq(schema.boothAssignments.assignmentDate, today));
 
+    // Determine current hour in WIB (UTC+7)
+    const now = new Date();
+    const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+    const wibDate = new Date(utc + 3600000 * 7);
+    const currentHour = wibDate.getHours();
+
     let totalRevenue = 0;
     let totalCupsSold = 0;
 
@@ -56,12 +62,19 @@ summaryRouter.get('/dashboard/today', requireRole('ADMIN'), async (c) => {
       const cups = Math.round(revenue / 10000);
       totalCupsSold += cups;
 
+      // Evaluasi shift: jika jam WIB >= 16 atau report sore
+      const shiftType: 'PAGI' | 'SORE' = currentHour >= 16 ? 'SORE' : 'PAGI';
+      const shift = shiftType === 'PAGI' ? 'Shift Pagi (09:00 - 16:00)' : 'Shift Sore (16:00 - 21:00)';
+
       return {
         id: b.id,
         name: b.name,
         attendantName: rep?.attendantName || assign?.userName || 'Belum Ditugaskan',
+        shift,
+        shiftType,
         status: rep?.status === 'CLOSED' ? 'Selesai' : rep?.status === 'OPEN' ? 'Beroperasi' : 'Belum Buka',
         revenue,
+        cupsSold: cups,
         variance,
       };
     });
@@ -253,5 +266,58 @@ summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN'), async (c) =>
   } catch (err) {
     console.error('[Summary Table Error]:', err);
     return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal memuat rekap penjualan' } }, 500);
+  }
+});
+
+// GET /dashboard/booth-comparison
+summaryRouter.get('/dashboard/booth-comparison', requireRole('ADMIN'), async (c) => {
+  try {
+    const range = c.req.query('range') || 'today';
+    const today: string = new Date().toISOString().split('T')[0]!;
+
+    const allBooths = await db
+      .select()
+      .from(schema.booths)
+      .where(eq(schema.booths.isActive, true))
+      .orderBy(desc(schema.booths.createdAt));
+
+    let allReports = await db.select().from(schema.dailyReports);
+
+    if (range === 'today') {
+      allReports = allReports.filter((r) => r.reportDate === today);
+    } else if (range === '7days') {
+      const d = new Date();
+      d.setDate(d.getDate() - 7);
+      const minDate = d.toISOString().split('T')[0]!;
+      allReports = allReports.filter((r) => r.reportDate >= minDate);
+    } else if (range === 'month') {
+      const startOfMonth = today.slice(0, 7) + '-01';
+      allReports = allReports.filter((r) => r.reportDate >= startOfMonth);
+    }
+
+    const comparisonData = allBooths.map((booth) => {
+      const boothReports = allReports.filter((r) => r.boothId === booth.id);
+      let totalRevenue = 0;
+      let totalCups = 0;
+
+      boothReports.forEach((r) => {
+        const rev = Math.max(0, (r.cashFinal || 0) - (r.cashModal || 0));
+        totalRevenue += rev;
+        totalCups += Math.round(rev / 10000);
+      });
+
+      return {
+        boothId: booth.id,
+        boothName: booth.name,
+        revenue: totalRevenue,
+        cupsSold: totalCups,
+        totalShifts: boothReports.length,
+      };
+    });
+
+    return c.json({ success: true, range, data: comparisonData });
+  } catch (err) {
+    console.error('[Booth Comparison Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal memuat data komparasi booth' } }, 500);
   }
 });
