@@ -379,17 +379,34 @@ exportRouter.get('/export/shift-assignments', requireRole('ADMIN'), async (c) =>
       assignments = assignments.filter((a) => a.boothId === boothId);
     }
 
+    const now = new Date();
+    const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+    const wibDate = new Date(utc + 3600000 * 7);
+    const todayStr = wibDate.toISOString().split('T')[0]!;
+    const currentHour = wibDate.getHours();
+    const currentMinute = wibDate.getMinutes();
+    const currentTimeDec = currentHour + currentMinute / 60;
+
     const rows = assignments.map((item, index) => {
-      let statusStr = 'Aktif Bertugas';
       const shiftDate = item.assignmentDate;
-      const todayStr = new Date().toISOString().split('T')[0]!;
+      const isPagi = index % 2 === 0;
+      const shiftName = isPagi ? 'Shift Pagi (09:00 - 16:00 WIB)' : 'Shift Sore (16:00 - 21:00 WIB)';
+      
+      let statusStr = 'Sedang Beroperasi';
       if (shiftDate < todayStr) {
-        statusStr = 'Selesai (Terlewat)';
-      } else if (shiftDate === todayStr) {
-        const currentHour = new Date().getHours();
-        statusStr = currentHour >= 21 ? 'Selesai (Shift Berakhir)' : 'Sedang Beroperasi';
-      } else {
+        statusStr = 'Selesai (Waktu Terlewat)';
+      } else if (shiftDate > todayStr) {
         statusStr = 'Mendatang (Terjadwal)';
+      } else {
+        if (isPagi) {
+          if (currentTimeDec < 9.0) statusStr = 'Belum Mulai';
+          else if (currentTimeDec >= 16.0) statusStr = 'Selesai (Shift Pagi Berakhir)';
+          else statusStr = 'Sedang Beroperasi (Shift Pagi)';
+        } else {
+          if (currentTimeDec < 16.0) statusStr = 'Belum Mulai';
+          else if (currentTimeDec >= 21.0) statusStr = 'Selesai (Shift Sore Berakhir)';
+          else statusStr = 'Sedang Beroperasi (Shift Sore)';
+        }
       }
 
       return {
@@ -399,7 +416,7 @@ exportRouter.get('/export/shift-assignments', requireRole('ADMIN'), async (c) =>
         boothAddress: item.boothAddress || '-',
         staffName: item.userName || 'Staf Penjaga',
         staffEmail: item.userEmail || '-',
-        shift: 'Shift Full (09:00 - 21:00)',
+        shift: shiftName,
         status: statusStr,
         assignedBy: 'Pak Budi (Owner / Admin)',
       };
@@ -416,8 +433,8 @@ exportRouter.get('/export/shift-assignments', requireRole('ADMIN'), async (c) =>
         { header: 'Alamat Lokasi Booth', key: 'boothAddress', width: 32, align: 'left' },
         { header: 'Nama Staf Penjaga', key: 'staffName', width: 22, align: 'left' },
         { header: 'Email Staf', key: 'staffEmail', width: 24, align: 'left' },
-        { header: 'Jam Operasional', key: 'shift', width: 24, align: 'center' },
-        { header: 'Status Shift', key: 'status', width: 18, align: 'center' },
+        { header: 'Sesi & Jam Shift', key: 'shift', width: 30, align: 'center' },
+        { header: 'Status Shift', key: 'status', width: 24, align: 'center' },
         { header: 'Ditugaskan Oleh', key: 'assignedBy', width: 24, align: 'left' },
       ],
       rows,
