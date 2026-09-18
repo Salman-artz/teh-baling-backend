@@ -406,10 +406,32 @@ masterRouter.post('/cup-rules', requireRole('ADMIN'), async (c) => {
     if (Array.isArray(rules)) {
       serverCupRulesFallback = rules;
 
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+      // Cache all products and cups for fast lookup
+      const allProds = await db.select().from(schema.teaProducts);
+      const allCups = await db.select().from(schema.cupTypes);
+
       for (const rule of rules) {
-        if (!rule.productId || !rule.cupPrices) continue;
+        if (!rule.cupPrices) continue;
+
+        // Resolve productId
+        let targetProdId = rule.productId;
+        if (!targetProdId || !uuidRegex.test(targetProdId)) {
+          const matched = allProds.find((p) => p.name.trim().toLowerCase() === String(rule.productName || '').trim().toLowerCase());
+          if (matched) targetProdId = matched.id;
+        }
+        if (!targetProdId || !uuidRegex.test(targetProdId)) continue;
+
         for (const [cupId, config] of Object.entries(rule.cupPrices as Record<string, any>)) {
           if (!cupId || !config) continue;
+          let targetCupId = cupId;
+          if (!uuidRegex.test(targetCupId)) {
+            const matchedCup = allCups.find((c) => c.name.trim().toLowerCase() === cupId.trim().toLowerCase());
+            if (matchedCup) targetCupId = matchedCup.id;
+          }
+          if (!targetCupId || !uuidRegex.test(targetCupId)) continue;
+
           const isEnabled = config.enabled !== false;
           const price = typeof config.price === 'number' ? config.price : (parseInt(config.price, 10) || 0);
 
@@ -417,8 +439,8 @@ masterRouter.post('/cup-rules', requireRole('ADMIN'), async (c) => {
             await db
               .insert(schema.productCupMappings)
               .values({
-                productId: rule.productId,
-                cupTypeId: cupId,
+                productId: targetProdId,
+                cupTypeId: targetCupId,
                 isActive: isEnabled,
                 price: price,
               })
@@ -431,7 +453,7 @@ masterRouter.post('/cup-rules', requireRole('ADMIN'), async (c) => {
                 },
               });
           } catch (dbErr) {
-            console.error(`[DB Upsert Mapping Error for product ${rule.productId} cup ${cupId}]:`, dbErr);
+            console.error(`[DB Upsert Mapping Error for product ${targetProdId} cup ${targetCupId}]:`, dbErr);
           }
         }
       }
