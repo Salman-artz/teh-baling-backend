@@ -348,6 +348,29 @@ masterRouter.delete('/cup-types/:id', requireRole('ADMIN'), async (c) => {
 });
 
 // =============================================================================
+// CUP RULES (DYNAMIC MATRIX PER SERIES)
+// =============================================================================
+
+let serverCupRules: any[] = [];
+
+masterRouter.get('/cup-rules', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION'), async (c) => {
+  return c.json({ success: true, data: serverCupRules });
+});
+
+masterRouter.post('/cup-rules', requireRole('ADMIN'), async (c) => {
+  try {
+    const { rules } = await c.req.json();
+    if (Array.isArray(rules)) {
+      serverCupRules = rules;
+    }
+    return c.json({ success: true, data: serverCupRules });
+  } catch (err) {
+    console.error('[Save Cup Rules Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal menyimpan aturan cup' } }, 500);
+  }
+});
+
+// =============================================================================
 // BOOTHS
 // =============================================================================
 
