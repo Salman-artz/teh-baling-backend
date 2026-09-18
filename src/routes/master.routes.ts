@@ -31,7 +31,14 @@ export const masterRouter = new Hono<AppEnv>();
 
 masterRouter.get('/tea-series', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION'), async (c) => {
   try {
-    const list = await db.select().from(schema.teaSeries).where(eq(schema.teaSeries.isActive, true));
+    const showAll = c.req.query('all') === 'true';
+    const user = c.get('user') as AuthContextUser;
+    const isGlobal = showAll || user.role === 'ADMIN';
+
+    const list = isGlobal
+      ? await db.select().from(schema.teaSeries).orderBy(desc(schema.teaSeries.createdAt))
+      : await db.select().from(schema.teaSeries).where(eq(schema.teaSeries.isActive, true)).orderBy(desc(schema.teaSeries.createdAt));
+
     return c.json({ success: true, data: list });
   } catch (err) {
     console.error('[Get Tea Series Error]:', err);
@@ -118,7 +125,11 @@ masterRouter.delete('/tea-series/:id', requireRole('ADMIN'), async (c) => {
 
 masterRouter.get('/tea-products', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION'), async (c) => {
   try {
-    let list = await db
+    const showAll = c.req.query('all') === 'true';
+    const user = c.get('user') as AuthContextUser;
+    const isGlobal = showAll || user.role === 'ADMIN';
+
+    let query = db
       .select({
         id: schema.teaProducts.id,
         name: schema.teaProducts.name,
@@ -129,9 +140,11 @@ masterRouter.get('/tea-products', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODU
         createdAt: schema.teaProducts.createdAt,
       })
       .from(schema.teaProducts)
-      .leftJoin(schema.teaSeries, eq(schema.teaProducts.seriesId, schema.teaSeries.id))
-      .where(eq(schema.teaProducts.isActive, true))
-      .orderBy(desc(schema.teaProducts.createdAt));
+      .leftJoin(schema.teaSeries, eq(schema.teaProducts.seriesId, schema.teaSeries.id));
+
+    let list = isGlobal
+      ? await query.orderBy(desc(schema.teaProducts.createdAt))
+      : await query.where(eq(schema.teaProducts.isActive, true)).orderBy(desc(schema.teaProducts.createdAt));
 
     // Auto-seed default products if empty so attendant is never blocked
     if (list.length === 0) {
@@ -158,20 +171,9 @@ masterRouter.get('/tea-products', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODU
           ])
           .onConflictDoNothing();
 
-        list = await db
-          .select({
-            id: schema.teaProducts.id,
-            name: schema.teaProducts.name,
-            seriesId: schema.teaProducts.seriesId,
-            seriesName: schema.teaSeries.name,
-            description: schema.teaProducts.description,
-            isActive: schema.teaProducts.isActive,
-            createdAt: schema.teaProducts.createdAt,
-          })
-          .from(schema.teaProducts)
-          .leftJoin(schema.teaSeries, eq(schema.teaProducts.seriesId, schema.teaSeries.id))
-          .where(eq(schema.teaProducts.isActive, true))
-          .orderBy(desc(schema.teaProducts.createdAt));
+        list = isGlobal
+          ? await query.orderBy(desc(schema.teaProducts.createdAt))
+          : await query.where(eq(schema.teaProducts.isActive, true)).orderBy(desc(schema.teaProducts.createdAt));
       }
     }
 
@@ -257,7 +259,14 @@ masterRouter.delete('/tea-products/:id', requireRole('ADMIN'), async (c) => {
 
 masterRouter.get('/cup-types', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION'), async (c) => {
   try {
-    let list = await db.select().from(schema.cupTypes).where(eq(schema.cupTypes.isActive, true));
+    const showAll = c.req.query('all') === 'true';
+    const user = c.get('user') as AuthContextUser;
+    const isGlobal = showAll || user.role === 'ADMIN';
+
+    let list = isGlobal
+      ? await db.select().from(schema.cupTypes).orderBy(desc(schema.cupTypes.createdAt))
+      : await db.select().from(schema.cupTypes).where(eq(schema.cupTypes.isActive, true)).orderBy(desc(schema.cupTypes.createdAt));
+
     if (list.length === 0) {
       await db.insert(schema.cupTypes).values([
         { id: 'c1111111-1111-1111-1111-111111111111', name: 'Cup Kecil (Reguler)', price: 5000 },
@@ -265,7 +274,9 @@ masterRouter.get('/cup-types', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTI
         { id: 'c3333333-3333-3333-3333-333333333333', name: 'Cup Big (Besar)', price: 10000 },
         { id: 'c4444444-4444-4444-4444-444444444444', name: 'Cup Jumbo (1 Liter)', price: 12000 },
       ]).onConflictDoNothing();
-      list = await db.select().from(schema.cupTypes).where(eq(schema.cupTypes.isActive, true));
+      list = isGlobal
+        ? await db.select().from(schema.cupTypes).orderBy(desc(schema.cupTypes.createdAt))
+        : await db.select().from(schema.cupTypes).where(eq(schema.cupTypes.isActive, true)).orderBy(desc(schema.cupTypes.createdAt));
     }
     return c.json({ success: true, data: list });
   } catch (err) {
