@@ -1,4 +1,4 @@
-import { pgTable, uuid, date, integer, text, numeric, timestamp, varchar, pgEnum, unique } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, date, integer, text, numeric, timestamp, varchar, pgEnum, unique, index } from 'drizzle-orm/pg-core';
 import { booths } from './booth.js';
 import { users } from './user.js';
 export const statusEnum = pgEnum('report_status', ['OPEN', 'CLOSED']);
@@ -24,4 +24,8 @@ export const dailyReports = pgTable('daily_reports', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   ukBoothReportDate: unique('uk_booth_report_date').on(table.boothId, table.reportDate),
+  idxDailyReportDate: index('idx_daily_reports_date').on(table.reportDate),
+  idxDailyReportBooth: index('idx_daily_reports_booth').on(table.boothId),
+  idxDailyReportAttendant: index('idx_daily_reports_attendant').on(table.attendantId),
+  idxDailyReportStatus: index('idx_daily_reports_status').on(table.status),
 }));

@@ -1,4 +1,4 @@
-import { pgTable, uuid, integer, boolean, timestamp, unique } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, integer, boolean, timestamp, unique, index } from 'drizzle-orm/pg-core';
 import { teaProducts } from './tea-product.js';
 import { cupTypes } from './cup-type.js';
 
@@ -12,4 +12,6 @@ export const productCupMappings = pgTable('product_cup_mappings', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   ukProductCup: unique('uk_product_cup').on(table.productId, table.cupTypeId),
+  idxPcmProduct: index('idx_pcm_product').on(table.productId),
+  idxPcmCup: index('idx_pcm_cup').on(table.cupTypeId),
 }));

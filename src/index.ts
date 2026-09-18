@@ -1,6 +1,7 @@
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { compress } from 'hono/compress';
 import { AppEnv, authMiddleware } from './middleware/auth.middleware.js';
 import { auditLoggerMiddleware, rateLimitMiddleware } from './middleware/rate-limit.middleware.js';
 import { authRouter } from './routes/auth.routes.js';
@@ -40,6 +41,7 @@ app.use(
 // 2. AUDIT & RATE LIMITING MIDDLEWARE
 // =============================================================================
 
+app.use('*', compress());
 app.use('*', auditLoggerMiddleware);
 app.use('/api/v1/*', rateLimitMiddleware);
 app.use('/api/v1/*', authMiddleware);

@@ -92,22 +92,24 @@ shiftsRouter.get('/daily-reports/today', requireRole('BOOTH_ATTENDANT'), async (
       })
       .from(schema.dailyReports)
       .leftJoin(schema.booths, eq(schema.dailyReports.boothId, schema.booths.id))
-      .where(eq(schema.dailyReports.attendantId, user.id))
-      .orderBy(desc(schema.dailyReports.createdAt));
+      .where(and(eq(schema.dailyReports.attendantId, user.id), eq(schema.dailyReports.reportDate, dateQuery)))
+      .orderBy(desc(schema.dailyReports.createdAt))
+      .limit(1);
 
-    const todayReport = userReports.find((r) => normalizeDate(r.reportDate) === dateQuery) || null;
+    const todayReport = userReports[0] || null;
 
     if (!todayReport) {
       return c.json({ success: true, data: null });
     }
 
-    const stockItems = await db.query.reportStockItems.findMany({
-      where: eq(schema.reportStockItems.dailyReportId, todayReport.id),
-    });
-
-    const saleItems = await db.query.reportSaleItems.findMany({
-      where: eq(schema.reportSaleItems.dailyReportId, todayReport.id),
-    });
+    const [stockItems, saleItems] = await Promise.all([
+      db.query.reportStockItems.findMany({
+        where: eq(schema.reportStockItems.dailyReportId, todayReport.id),
+      }),
+      db.query.reportSaleItems.findMany({
+        where: eq(schema.reportSaleItems.dailyReportId, todayReport.id),
+      }),
+    ]);
 
     return c.json({
       success: true,
@@ -263,24 +265,25 @@ shiftsRouter.post('/daily-reports/start', requireRole('BOOTH_ATTENDANT'), async 
       })
       .returning();
 
-    // Simpan Cup Stock Items jika disediakan
+    // Simpan Cup Stock Items jika disediakan (Batch Insert)
     if (report && stockItems && Array.isArray(stockItems) && stockItems.length > 0) {
       const allCupTypes = await db.query.cupTypes.findMany();
       const cupPriceMap = new Map(allCupTypes.map((c) => [c.id, c.price]));
 
       await db.delete(schema.reportStockItems).where(eq(schema.reportStockItems.dailyReportId, report.id));
 
-      for (const item of stockItems) {
-        if (item.cupTypeId) {
-          const priceSnapshot = cupPriceMap.get(item.cupTypeId) || 0;
-          await db.insert(schema.reportStockItems).values({
-            dailyReportId: report.id,
-            cupTypeId: item.cupTypeId,
-            qtyInitial: item.qtyInitial || 0,
-            qtySold: 0,
-            priceSnapshot,
-          });
-        }
+      const stockRows = stockItems
+        .filter((item) => item.cupTypeId)
+        .map((item) => ({
+          dailyReportId: report.id,
+          cupTypeId: item.cupTypeId,
+          qtyInitial: item.qtyInitial || 0,
+          qtySold: 0,
+          priceSnapshot: cupPriceMap.get(item.cupTypeId) || 0,
+        }));
+
+      if (stockRows.length > 0) {
+        await db.insert(schema.reportStockItems).values(stockRows);
       }
     }
 
@@ -448,43 +451,50 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
       const cupPriceMap = new Map(allCupTypes.map((c) => [c.id, c.price]));
       const defaultCupId = allCupTypes[0]?.id;
 
-      // Simpan Sisa Cup & Cup Terpakai
+      // Simpan Sisa Cup & Cup Terpakai (Batch Insert)
       if (stockItems && Array.isArray(stockItems) && stockItems.length > 0) {
         await db.delete(schema.reportStockItems).where(eq(schema.reportStockItems.dailyReportId, finalReport.id));
-        for (const item of stockItems) {
-          if (item.cupTypeId) {
+        const stockRows = stockItems
+          .filter((item) => item.cupTypeId)
+          .map((item) => {
             const priceSnapshot = cupPriceMap.get(item.cupTypeId) || 0;
             const initial = item.qtyInitial ?? 0;
             const final = item.qtyFinal ?? 0;
             const sold = item.qtySold !== undefined ? item.qtySold : Math.max(0, initial - final);
-            await db.insert(schema.reportStockItems).values({
+            return {
               dailyReportId: finalReport.id,
               cupTypeId: item.cupTypeId,
               qtyInitial: initial,
               qtySold: sold,
               priceSnapshot,
-            });
-          }
+            };
+          });
+
+        if (stockRows.length > 0) {
+          await db.insert(schema.reportStockItems).values(stockRows);
         }
       }
 
-      // Simpan Item Penjualan Produk
+      // Simpan Item Penjualan Produk (Batch Insert)
       if (saleItems && Array.isArray(saleItems) && saleItems.length > 0) {
         await db.delete(schema.reportSaleItems).where(eq(schema.reportSaleItems.dailyReportId, finalReport.id));
-        for (const s of saleItems) {
-          if (s.productId && s.qtySold > 0) {
+        const saleRows = saleItems
+          .filter((s) => s.productId && s.qtySold > 0)
+          .map((s) => {
             const cupId = s.cupTypeId || defaultCupId;
-            if (cupId) {
-              const priceSnapshot = cupPriceMap.get(cupId) || 0;
-              await db.insert(schema.reportSaleItems).values({
-                dailyReportId: finalReport.id,
-                productId: s.productId,
-                cupTypeId: cupId,
-                qtySold: s.qtySold,
-                priceSnapshot,
-              });
-            }
-          }
+            const priceSnapshot = cupId ? (cupPriceMap.get(cupId) || 0) : 0;
+            return {
+              dailyReportId: finalReport.id,
+              productId: s.productId,
+              cupTypeId: cupId!,
+              qtySold: s.qtySold,
+              priceSnapshot,
+            };
+          })
+          .filter((s) => Boolean(s.cupTypeId));
+
+        if (saleRows.length > 0) {
+          await db.insert(schema.reportSaleItems).values(saleRows);
         }
       }
     }

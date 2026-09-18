@@ -1,4 +1,4 @@
-import { pgTable, uuid, integer } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, integer, index } from 'drizzle-orm/pg-core';
 import { dailyReports } from './daily-report.js';
 import { cupTypes } from './cup-type.js';
 export const reportStockItems = pgTable('report_stock_items', {
@@ -8,4 +8,7 @@ export const reportStockItems = pgTable('report_stock_items', {
   qtyInitial: integer('qty_initial').notNull().default(0),
   qtySold: integer('qty_sold').notNull().default(0),
   priceSnapshot: integer('price_snapshot').notNull(),
-});
+}, (table) => ({
+  idxStockItemsReport: index('idx_stock_items_report').on(table.dailyReportId),
+  idxStockItemsCup: index('idx_stock_items_cup').on(table.cupTypeId),
+}));

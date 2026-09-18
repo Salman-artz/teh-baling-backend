@@ -1,4 +1,4 @@
-import { pgTable, uuid, date, timestamp, varchar, unique } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, date, timestamp, varchar, unique, index } from 'drizzle-orm/pg-core';
 import { booths } from './booth.js';
 import { users } from './user.js';
 export const boothAssignments = pgTable('booth_assignments', {
@@ -12,4 +12,7 @@ export const boothAssignments = pgTable('booth_assignments', {
 }, (table) => ({
   ukBoothDate: unique('uk_booth_date').on(table.boothId, table.assignmentDate),
   ukUserDate: unique('uk_user_date').on(table.userId, table.assignmentDate),
+  idxAssignmentDate: index('idx_assignment_date').on(table.assignmentDate),
+  idxAssignmentUser: index('idx_assignment_user').on(table.userId),
+  idxAssignmentBooth: index('idx_assignment_booth').on(table.boothId),
 }));
