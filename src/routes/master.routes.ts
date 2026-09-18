@@ -118,7 +118,7 @@ masterRouter.delete('/tea-series/:id', requireRole('ADMIN'), async (c) => {
 
 masterRouter.get('/tea-products', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION'), async (c) => {
   try {
-    const list = await db
+    let list = await db
       .select({
         id: schema.teaProducts.id,
         name: schema.teaProducts.name,
@@ -132,6 +132,49 @@ masterRouter.get('/tea-products', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODU
       .leftJoin(schema.teaSeries, eq(schema.teaProducts.seriesId, schema.teaSeries.id))
       .where(eq(schema.teaProducts.isActive, true))
       .orderBy(desc(schema.teaProducts.createdAt));
+
+    // Auto-seed default products if empty so attendant is never blocked
+    if (list.length === 0) {
+      let series = await db.query.teaSeries.findFirst();
+      if (!series) {
+        const [newSeries] = await db
+          .insert(schema.teaSeries)
+          .values({
+            name: 'Original Tea Series',
+            description: 'Varian Teh Racikan Asli Teh Baling',
+          })
+          .returning();
+        series = newSeries;
+      }
+
+      if (series) {
+        await db
+          .insert(schema.teaProducts)
+          .values([
+            { name: 'Teh Baling Melati Original', seriesId: series.id, description: 'Teh melati wangi khas' },
+            { name: 'Teh Kampul Lemon Segar', seriesId: series.id, description: 'Teh kampul perasan lemon asli' },
+            { name: 'Teh Baling Yakult Segar', seriesId: series.id, description: 'Teh manis segar perpaduan Yakult' },
+            { name: 'Teh Baling Lychee Fruity', seriesId: series.id, description: 'Teh rasa leci segar' },
+          ])
+          .onConflictDoNothing();
+
+        list = await db
+          .select({
+            id: schema.teaProducts.id,
+            name: schema.teaProducts.name,
+            seriesId: schema.teaProducts.seriesId,
+            seriesName: schema.teaSeries.name,
+            description: schema.teaProducts.description,
+            isActive: schema.teaProducts.isActive,
+            createdAt: schema.teaProducts.createdAt,
+          })
+          .from(schema.teaProducts)
+          .leftJoin(schema.teaSeries, eq(schema.teaProducts.seriesId, schema.teaSeries.id))
+          .where(eq(schema.teaProducts.isActive, true))
+          .orderBy(desc(schema.teaProducts.createdAt));
+      }
+    }
+
     return c.json({ success: true, data: list });
   } catch (err) {
     console.error('[Get Tea Products Error]:', err);
@@ -214,7 +257,16 @@ masterRouter.delete('/tea-products/:id', requireRole('ADMIN'), async (c) => {
 
 masterRouter.get('/cup-types', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION'), async (c) => {
   try {
-    const list = await db.select().from(schema.cupTypes).where(eq(schema.cupTypes.isActive, true));
+    let list = await db.select().from(schema.cupTypes).where(eq(schema.cupTypes.isActive, true));
+    if (list.length === 0) {
+      await db.insert(schema.cupTypes).values([
+        { id: 'c1111111-1111-1111-1111-111111111111', name: 'Cup Kecil (Reguler)', price: 5000 },
+        { id: 'c2222222-2222-2222-2222-222222222222', name: 'Cup Medium (Sedang)', price: 8000 },
+        { id: 'c3333333-3333-3333-3333-333333333333', name: 'Cup Big (Besar)', price: 10000 },
+        { id: 'c4444444-4444-4444-4444-444444444444', name: 'Cup Jumbo (1 Liter)', price: 12000 },
+      ]).onConflictDoNothing();
+      list = await db.select().from(schema.cupTypes).where(eq(schema.cupTypes.isActive, true));
+    }
     return c.json({ success: true, data: list });
   } catch (err) {
     console.error('[Get Cup Types Error]:', err);

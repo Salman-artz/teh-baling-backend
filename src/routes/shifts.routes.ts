@@ -22,10 +22,20 @@ const dailyReportStartSchema = z.object({
 
 const dailyReportEndSchema = z.object({
   cashFinal: z.coerce.number().int().min(0, 'Uang akhir kasir tidak boleh bernilai negatif'),
+  stockItems: z
+    .array(
+      z.object({
+        cupTypeId: z.string(),
+        qtyInitial: z.coerce.number().int().min(0).optional(),
+        qtyFinal: z.coerce.number().int().min(0).optional(),
+        qtySold: z.coerce.number().int().min(0).optional(),
+      })
+    )
+    .optional(),
   saleItems: z
     .array(
       z.object({
-        productId: z.string().optional(),
+        productId: z.string(),
         cupTypeId: z.string().optional(),
         qtySold: z.coerce.number().int().min(0),
       })
@@ -270,7 +280,7 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
       );
     }
 
-    const { cashFinal, notes, gpsLatitude, gpsLongitude, gpsAccuracy } = parseResult.data;
+    const { cashFinal, stockItems, saleItems, notes, gpsLatitude, gpsLongitude, gpsAccuracy } = parseResult.data;
     const today: string = new Date().toISOString().split('T')[0] || '';
 
     const normalizeDate = (d: unknown): string => {
@@ -331,6 +341,8 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
       }
     }
 
+    let finalReport;
+
     if (existingReport) {
       const [updated] = await db
         .update(schema.dailyReports)
@@ -346,48 +358,94 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
         })
         .where(eq(schema.dailyReports.id, existingReport.id))
         .returning();
+      finalReport = updated;
+    } else {
+      if (!targetBoothId) {
+        return c.json(
+          {
+            success: false,
+            error: { code: 'NO_BOOTH_ASSIGNMENT', message: 'Akses Ditolak: Anda tidak memiliki jadwal penugasan shift pada hari ini' },
+          },
+          403
+        );
+      }
 
-      return c.json({ success: true, data: updated });
-    }
-
-    if (!targetBoothId) {
-      return c.json(
-        {
-          success: false,
-          error: { code: 'NO_BOOTH_ASSIGNMENT', message: 'Akses Ditolak: Anda tidak memiliki jadwal penugasan shift pada hari ini' },
-        },
-        403
-      );
-    }
-
-    const [created] = await db
-      .insert(schema.dailyReports)
-      .values({
-        boothId: targetBoothId,
-        attendantId: user.id,
-        reportDate: today,
-        shiftType: assignment?.shiftType || 'PAGI',
-        cashModal: 50000,
-        cashFinal,
-        notes: notes || null,
-        gpsLatEnd: gpsLatitude !== undefined && gpsLatitude !== null ? String(gpsLatitude) : null,
-        gpsLngEnd: gpsLongitude !== undefined && gpsLongitude !== null ? String(gpsLongitude) : null,
-        gpsAccuracyEnd: gpsAccuracy !== undefined && gpsAccuracy !== null ? String(gpsAccuracy) : null,
-        gpsTimeEnd: new Date(),
-        status: 'CLOSED',
-      })
-      .onConflictDoUpdate({
-        target: [schema.dailyReports.boothId, schema.dailyReports.reportDate],
-        set: {
+      const [created] = await db
+        .insert(schema.dailyReports)
+        .values({
+          boothId: targetBoothId,
+          attendantId: user.id,
+          reportDate: today,
+          shiftType: assignment?.shiftType || 'PAGI',
+          cashModal: 50000,
           cashFinal,
           notes: notes || null,
+          gpsLatEnd: gpsLatitude !== undefined && gpsLatitude !== null ? String(gpsLatitude) : null,
+          gpsLngEnd: gpsLongitude !== undefined && gpsLongitude !== null ? String(gpsLongitude) : null,
+          gpsAccuracyEnd: gpsAccuracy !== undefined && gpsAccuracy !== null ? String(gpsAccuracy) : null,
+          gpsTimeEnd: new Date(),
           status: 'CLOSED',
-          updatedAt: new Date(),
-        },
-      })
-      .returning();
+        })
+        .onConflictDoUpdate({
+          target: [schema.dailyReports.boothId, schema.dailyReports.reportDate],
+          set: {
+            cashFinal,
+            notes: notes || null,
+            status: 'CLOSED',
+            updatedAt: new Date(),
+          },
+        })
+        .returning();
+      finalReport = created;
+    }
 
-    return c.json({ success: true, data: created });
+    if (finalReport) {
+      const allCupTypes = await db.query.cupTypes.findMany();
+      const cupPriceMap = new Map(allCupTypes.map((c) => [c.id, c.price]));
+      const defaultCupId = allCupTypes[0]?.id;
+
+      // Simpan Sisa Cup & Cup Terpakai
+      if (stockItems && Array.isArray(stockItems) && stockItems.length > 0) {
+        await db.delete(schema.reportStockItems).where(eq(schema.reportStockItems.dailyReportId, finalReport.id));
+        for (const item of stockItems) {
+          if (item.cupTypeId) {
+            const priceSnapshot = cupPriceMap.get(item.cupTypeId) || 0;
+            const initial = item.qtyInitial ?? 0;
+            const final = item.qtyFinal ?? 0;
+            const sold = item.qtySold !== undefined ? item.qtySold : Math.max(0, initial - final);
+            await db.insert(schema.reportStockItems).values({
+              dailyReportId: finalReport.id,
+              cupTypeId: item.cupTypeId,
+              qtyInitial: initial,
+              qtySold: sold,
+              priceSnapshot,
+            });
+          }
+        }
+      }
+
+      // Simpan Item Penjualan Produk
+      if (saleItems && Array.isArray(saleItems) && saleItems.length > 0) {
+        await db.delete(schema.reportSaleItems).where(eq(schema.reportSaleItems.dailyReportId, finalReport.id));
+        for (const s of saleItems) {
+          if (s.productId && s.qtySold > 0) {
+            const cupId = s.cupTypeId || defaultCupId;
+            if (cupId) {
+              const priceSnapshot = cupPriceMap.get(cupId) || 0;
+              await db.insert(schema.reportSaleItems).values({
+                dailyReportId: finalReport.id,
+                productId: s.productId,
+                cupTypeId: cupId,
+                qtySold: s.qtySold,
+                priceSnapshot,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    return c.json({ success: true, data: finalReport });
   } catch (err) {
     console.error('[End Shift Error]:', err);
     return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal menutup laporan shift' } }, 500);
