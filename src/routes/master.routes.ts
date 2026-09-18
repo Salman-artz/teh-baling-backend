@@ -668,9 +668,16 @@ masterRouter.get('/booth-assignments', requireRole('ADMIN', 'BOOTH_ATTENDANT', '
       .innerJoin(schema.users, eq(schema.boothAssignments.userId, schema.users.id))
       .orderBy(desc(schema.boothAssignments.assignmentDate), desc(schema.boothAssignments.createdAt));
 
+    const normalizeDate = (d: unknown): string => {
+      if (!d) return '';
+      if (typeof d === 'string') return d.includes('T') ? (d.split('T')[0] || '') : d;
+      if (d instanceof Date) return d.toISOString().split('T')[0] || '';
+      return String(d).split('T')[0] || '';
+    };
+
     let filtered = dbList;
     if (dateQuery) {
-      filtered = filtered.filter((a) => a.assignmentDate === dateQuery);
+      filtered = filtered.filter((a) => normalizeDate(a.assignmentDate) === dateQuery);
     }
     if (boothIdQuery) {
       filtered = filtered.filter((a) => a.boothId === boothIdQuery);
@@ -678,7 +685,7 @@ masterRouter.get('/booth-assignments', requireRole('ADMIN', 'BOOTH_ATTENDANT', '
 
     const formatted = filtered.map((a) => ({
       id: a.id,
-      date: a.assignmentDate,
+      date: normalizeDate(a.assignmentDate),
       shiftType: a.shiftType || 'PAGI',
       boothId: a.boothId,
       boothName: a.boothName,
@@ -687,7 +694,7 @@ masterRouter.get('/booth-assignments', requireRole('ADMIN', 'BOOTH_ATTENDANT', '
       longitude: a.longitude ? parseFloat(a.longitude) : 112.7521,
       userId: a.userId,
       userEmail: a.userEmail,
-      userName: `${a.userName} (${a.userEmail})`,
+      userName: a.userName,
       assignedBy: 'Administrator',
       status: 'OPEN',
     }));
