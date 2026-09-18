@@ -348,27 +348,101 @@ masterRouter.delete('/cup-types/:id', requireRole('ADMIN'), async (c) => {
 });
 
 // =============================================================================
-// CUP RULES (DYNAMIC MATRIX PER SERIES)
+// CUP RULES (DYNAMIC MATRIX PER PRODUCT - PERSISTENT IN DATABASE)
 // =============================================================================
 
-let serverCupRules: any[] = [];
+let serverCupRulesFallback: any[] = [];
 
 masterRouter.get('/cup-rules', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION'), async (c) => {
-  return c.json({ success: true, data: serverCupRules });
+  try {
+    const mappings = await db
+      .select({
+        id: schema.productCupMappings.id,
+        productId: schema.productCupMappings.productId,
+        productName: schema.teaProducts.name,
+        seriesName: schema.teaSeries.name,
+        cupTypeId: schema.productCupMappings.cupTypeId,
+        cupTypeName: schema.cupTypes.name,
+        price: schema.productCupMappings.price,
+        isActive: schema.productCupMappings.isActive,
+      })
+      .from(schema.productCupMappings)
+      .innerJoin(schema.teaProducts, eq(schema.productCupMappings.productId, schema.teaProducts.id))
+      .leftJoin(schema.teaSeries, eq(schema.teaProducts.seriesId, schema.teaSeries.id))
+      .innerJoin(schema.cupTypes, eq(schema.productCupMappings.cupTypeId, schema.cupTypes.id));
+
+    if (mappings.length > 0) {
+      const rulesMap: Record<string, any> = {};
+      for (const m of mappings) {
+        if (!rulesMap[m.productId]) {
+          rulesMap[m.productId] = {
+            id: `rule_${m.productId}`,
+            productId: m.productId,
+            productName: m.productName,
+            seriesName: m.seriesName,
+            cupPrices: {},
+          };
+        }
+        rulesMap[m.productId].cupPrices[m.cupTypeId] = {
+          enabled: m.isActive,
+          price: m.price || 0,
+        };
+      }
+      const dbRules = Object.values(rulesMap);
+      serverCupRulesFallback = dbRules;
+      return c.json({ success: true, data: dbRules });
+    }
+
+    return c.json({ success: true, data: serverCupRulesFallback });
+  } catch (err) {
+    console.error('[Get Cup Rules Error]:', err);
+    return c.json({ success: true, data: serverCupRulesFallback });
+  }
 });
 
 masterRouter.post('/cup-rules', requireRole('ADMIN'), async (c) => {
   try {
     const { rules } = await c.req.json();
     if (Array.isArray(rules)) {
-      serverCupRules = rules;
+      serverCupRulesFallback = rules;
+
+      for (const rule of rules) {
+        if (!rule.productId || !rule.cupPrices) continue;
+        for (const [cupId, config] of Object.entries(rule.cupPrices as Record<string, any>)) {
+          if (!cupId || !config) continue;
+          const isEnabled = config.enabled !== false;
+          const price = typeof config.price === 'number' ? config.price : (parseInt(config.price, 10) || 0);
+
+          try {
+            await db
+              .insert(schema.productCupMappings)
+              .values({
+                productId: rule.productId,
+                cupTypeId: cupId,
+                isActive: isEnabled,
+                price: price,
+              })
+              .onConflictDoUpdate({
+                target: [schema.productCupMappings.productId, schema.productCupMappings.cupTypeId],
+                set: {
+                  isActive: isEnabled,
+                  price: price,
+                  updatedAt: new Date(),
+                },
+              });
+          } catch (dbErr) {
+            console.error(`[DB Upsert Mapping Error for product ${rule.productId} cup ${cupId}]:`, dbErr);
+          }
+        }
+      }
     }
-    return c.json({ success: true, data: serverCupRules });
+    return c.json({ success: true, data: serverCupRulesFallback });
   } catch (err) {
     console.error('[Save Cup Rules Error]:', err);
     return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal menyimpan aturan cup' } }, 500);
   }
 });
+
 
 // =============================================================================
 // BOOTHS
