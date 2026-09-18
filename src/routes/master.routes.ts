@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
-import { eq, desc, and } from 'drizzle-orm';
+import { eq, desc, and, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import * as schema from '../db/schema/index.js';
 import { AppEnv, AuthContextUser, requireRole } from '../middleware/auth.middleware.js';
@@ -408,9 +408,19 @@ masterRouter.post('/cup-rules', requireRole('ADMIN'), async (c) => {
 
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-      // Cache all products and cups for fast lookup
-      const allProds = await db.select().from(schema.teaProducts);
-      const allCups = await db.select().from(schema.cupTypes);
+      // Cache all products and cups for fast lookup in a single roundtrip
+      const [allProds, allCups] = await Promise.all([
+        db.select().from(schema.teaProducts),
+        db.select().from(schema.cupTypes),
+      ]);
+
+      const valuesToUpsert: Array<{
+        productId: string;
+        cupTypeId: string;
+        isActive: boolean;
+        price: number;
+        updatedAt: Date;
+      }> = [];
 
       for (const rule of rules) {
         if (!rule.cupPrices) continue;
@@ -435,27 +445,28 @@ masterRouter.post('/cup-rules', requireRole('ADMIN'), async (c) => {
           const isEnabled = config.enabled !== false;
           const price = typeof config.price === 'number' ? config.price : (parseInt(config.price, 10) || 0);
 
-          try {
-            await db
-              .insert(schema.productCupMappings)
-              .values({
-                productId: targetProdId,
-                cupTypeId: targetCupId,
-                isActive: isEnabled,
-                price: price,
-              })
-              .onConflictDoUpdate({
-                target: [schema.productCupMappings.productId, schema.productCupMappings.cupTypeId],
-                set: {
-                  isActive: isEnabled,
-                  price: price,
-                  updatedAt: new Date(),
-                },
-              });
-          } catch (dbErr) {
-            console.error(`[DB Upsert Mapping Error for product ${targetProdId} cup ${targetCupId}]:`, dbErr);
-          }
+          valuesToUpsert.push({
+            productId: targetProdId,
+            cupTypeId: targetCupId,
+            isActive: isEnabled,
+            price: price,
+            updatedAt: new Date(),
+          });
         }
+      }
+
+      if (valuesToUpsert.length > 0) {
+        await db
+          .insert(schema.productCupMappings)
+          .values(valuesToUpsert)
+          .onConflictDoUpdate({
+            target: [schema.productCupMappings.productId, schema.productCupMappings.cupTypeId],
+            set: {
+              isActive: sql`excluded.is_active`,
+              price: sql`excluded.price`,
+              updatedAt: sql`excluded.updated_at`,
+            },
+          });
       }
     }
     return c.json({ success: true, data: serverCupRulesFallback });
