@@ -294,6 +294,30 @@ masterRouter.post('/cup-types', requireRole('ADMIN'), async (c) => {
   }
 });
 
+masterRouter.patch('/cup-types/:id', requireRole('ADMIN'), async (c) => {
+  try {
+    const id = c.req.param('id');
+    if (!id) {
+      return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'ID cup wajib disertakan' } }, 400);
+    }
+    const { name, price, isActive } = await c.req.json();
+    const updateData: any = { updatedAt: new Date() };
+    if (name !== undefined) updateData.name = name.trim();
+    if (price !== undefined) updateData.price = Number(price);
+    if (isActive !== undefined) updateData.isActive = Boolean(isActive);
+
+    const [updated] = await db
+      .update(schema.cupTypes)
+      .set(updateData)
+      .where(eq(schema.cupTypes.id, id))
+      .returning();
+    return c.json({ success: true, data: updated });
+  } catch (err) {
+    console.error('[Update Cup Type Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal mengubah ukuran cup' } }, 500);
+  }
+});
+
 masterRouter.delete('/cup-types/:id', requireRole('ADMIN'), async (c) => {
   try {
     const id = c.req.param('id');
