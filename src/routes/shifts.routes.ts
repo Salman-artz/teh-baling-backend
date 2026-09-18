@@ -105,6 +105,10 @@ shiftsRouter.get('/daily-reports/today', requireRole('BOOTH_ATTENDANT'), async (
       where: eq(schema.reportStockItems.dailyReportId, todayReport.id),
     });
 
+    const saleItems = await db.query.reportSaleItems.findMany({
+      where: eq(schema.reportSaleItems.dailyReportId, todayReport.id),
+    });
+
     return c.json({
       success: true,
       data: {
@@ -115,6 +119,12 @@ shiftsRouter.get('/daily-reports/today', requireRole('BOOTH_ATTENDANT'), async (
           qtyInitial: s.qtyInitial,
           qtySold: s.qtySold,
           priceSnapshot: s.priceSnapshot,
+        })),
+        saleItems: saleItems.map((si) => ({
+          productId: si.productId,
+          cupTypeId: si.cupTypeId,
+          qtySold: si.qtySold,
+          priceSnapshot: si.priceSnapshot,
         })),
       },
     });
@@ -153,6 +163,27 @@ shiftsRouter.post('/daily-reports/start', requireRole('BOOTH_ATTENDANT'), async 
       if (d instanceof Date) return d.toISOString().split('T')[0] || '';
       return String(d).split('T')[0] || '';
     };
+
+    // KUNCI: Cek jika attendant sudah pernah mulai shift hari ini
+    const existingStart = await db.query.dailyReports.findFirst({
+      where: and(
+        eq(schema.dailyReports.attendantId, user.id),
+        eq(schema.dailyReports.reportDate, today)
+      ),
+    });
+
+    if (existingStart && (existingStart.status === 'OPEN' || existingStart.status === 'CLOSED')) {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'SHIFT_ALREADY_LOCKED',
+            message: 'Akses Ditolak: Anda sudah memulai shift untuk hari ini dan data telah dikunci. Anda tidak dapat mengedit data mulai shift kembali.',
+          },
+        },
+        400
+      );
+    }
 
     const userAssignments = await db.query.boothAssignments.findMany({
       where: eq(schema.boothAssignments.userId, user.id),
@@ -296,6 +327,19 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
         eq(schema.dailyReports.reportDate, today)
       ),
     });
+
+    if (existingReport && existingReport.status === 'CLOSED') {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'SHIFT_ALREADY_CLOSED',
+            message: 'Akses Ditolak: Anda sudah menyelesaikan Tutup Shift (closing) hari ini dan laporan telah dikunci secara permanen.',
+          },
+        },
+        400
+      );
+    }
 
     const userAssignments = await db.query.boothAssignments.findMany({
       where: eq(schema.boothAssignments.userId, user.id),
