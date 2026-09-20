@@ -80,15 +80,17 @@ async function migrateAndSeed() {
       );
     `;
 
-    // product_cup_mappings
+    // series_cup_mappings
     await sql`
-      CREATE TABLE IF NOT EXISTS product_cup_mappings (
+      CREATE TABLE IF NOT EXISTS series_cup_mappings (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        product_id UUID NOT NULL REFERENCES tea_products(id) ON DELETE CASCADE,
+        series_id UUID NOT NULL REFERENCES tea_series(id) ON DELETE CASCADE,
         cup_type_id UUID NOT NULL REFERENCES cup_types(id) ON DELETE CASCADE,
+        price INT NOT NULL DEFAULT 10000,
         is_active BOOLEAN NOT NULL DEFAULT TRUE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        CONSTRAINT uk_product_cup UNIQUE (product_id, cup_type_id)
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT uk_series_cup UNIQUE (series_id, cup_type_id)
       );
     `;
 

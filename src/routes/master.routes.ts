@@ -348,7 +348,7 @@ masterRouter.delete('/cup-types/:id', requireRole('ADMIN'), async (c) => {
 });
 
 // =============================================================================
-// CUP RULES (DYNAMIC MATRIX PER PRODUCT - PERSISTENT IN DATABASE)
+// CUP RULES (DYNAMIC MATRIX PER SERIES - PERSISTENT IN DATABASE)
 // =============================================================================
 
 let serverCupRulesFallback: any[] = [];
@@ -357,33 +357,30 @@ masterRouter.get('/cup-rules', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTI
   try {
     const mappings = await db
       .select({
-        id: schema.productCupMappings.id,
-        productId: schema.productCupMappings.productId,
-        productName: schema.teaProducts.name,
+        id: schema.seriesCupMappings.id,
+        seriesId: schema.seriesCupMappings.seriesId,
         seriesName: schema.teaSeries.name,
-        cupTypeId: schema.productCupMappings.cupTypeId,
+        cupTypeId: schema.seriesCupMappings.cupTypeId,
         cupTypeName: schema.cupTypes.name,
-        price: schema.productCupMappings.price,
-        isActive: schema.productCupMappings.isActive,
+        price: schema.seriesCupMappings.price,
+        isActive: schema.seriesCupMappings.isActive,
       })
-      .from(schema.productCupMappings)
-      .innerJoin(schema.teaProducts, eq(schema.productCupMappings.productId, schema.teaProducts.id))
-      .leftJoin(schema.teaSeries, eq(schema.teaProducts.seriesId, schema.teaSeries.id))
-      .innerJoin(schema.cupTypes, eq(schema.productCupMappings.cupTypeId, schema.cupTypes.id));
+      .from(schema.seriesCupMappings)
+      .innerJoin(schema.teaSeries, eq(schema.seriesCupMappings.seriesId, schema.teaSeries.id))
+      .innerJoin(schema.cupTypes, eq(schema.seriesCupMappings.cupTypeId, schema.cupTypes.id));
 
     if (mappings.length > 0) {
       const rulesMap: Record<string, any> = {};
       for (const m of mappings) {
-        if (!rulesMap[m.productId]) {
-          rulesMap[m.productId] = {
-            id: `rule_${m.productId}`,
-            productId: m.productId,
-            productName: m.productName,
+        if (!rulesMap[m.seriesId]) {
+          rulesMap[m.seriesId] = {
+            id: `rule_${m.seriesId}`,
+            seriesId: m.seriesId,
             seriesName: m.seriesName,
             cupPrices: {},
           };
         }
-        rulesMap[m.productId].cupPrices[m.cupTypeId] = {
+        rulesMap[m.seriesId].cupPrices[m.cupTypeId] = {
           enabled: m.isActive,
           price: m.price || 0,
         };
@@ -408,14 +405,14 @@ masterRouter.post('/cup-rules', requireRole('ADMIN'), async (c) => {
 
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-      // Cache all products and cups for fast lookup in a single roundtrip
-      const [allProds, allCups] = await Promise.all([
-        db.select().from(schema.teaProducts),
+      // Cache all series and cups for fast lookup in a single roundtrip
+      const [allSeries, allCups] = await Promise.all([
+        db.select().from(schema.teaSeries),
         db.select().from(schema.cupTypes),
       ]);
 
       const valuesToUpsert: Array<{
-        productId: string;
+        seriesId: string;
         cupTypeId: string;
         isActive: boolean;
         price: number;
@@ -425,13 +422,13 @@ masterRouter.post('/cup-rules', requireRole('ADMIN'), async (c) => {
       for (const rule of rules) {
         if (!rule.cupPrices) continue;
 
-        // Resolve productId
-        let targetProdId = rule.productId;
-        if (!targetProdId || !uuidRegex.test(targetProdId)) {
-          const matched = allProds.find((p) => p.name.trim().toLowerCase() === String(rule.productName || '').trim().toLowerCase());
-          if (matched) targetProdId = matched.id;
+        // Resolve seriesId
+        let targetSeriesId = rule.seriesId;
+        if (!targetSeriesId || !uuidRegex.test(targetSeriesId)) {
+          const matched = allSeries.find((s) => s.name.trim().toLowerCase() === String(rule.seriesName || '').trim().toLowerCase());
+          if (matched) targetSeriesId = matched.id;
         }
-        if (!targetProdId || !uuidRegex.test(targetProdId)) continue;
+        if (!targetSeriesId || !uuidRegex.test(targetSeriesId)) continue;
 
         for (const [cupId, config] of Object.entries(rule.cupPrices as Record<string, any>)) {
           if (!cupId || !config) continue;
@@ -446,7 +443,7 @@ masterRouter.post('/cup-rules', requireRole('ADMIN'), async (c) => {
           const price = typeof config.price === 'number' ? config.price : (parseInt(config.price, 10) || 0);
 
           valuesToUpsert.push({
-            productId: targetProdId,
+            seriesId: targetSeriesId,
             cupTypeId: targetCupId,
             isActive: isEnabled,
             price: price,
@@ -457,10 +454,10 @@ masterRouter.post('/cup-rules', requireRole('ADMIN'), async (c) => {
 
       if (valuesToUpsert.length > 0) {
         await db
-          .insert(schema.productCupMappings)
+          .insert(schema.seriesCupMappings)
           .values(valuesToUpsert)
           .onConflictDoUpdate({
-            target: [schema.productCupMappings.productId, schema.productCupMappings.cupTypeId],
+            target: [schema.seriesCupMappings.seriesId, schema.seriesCupMappings.cupTypeId],
             set: {
               isActive: sql`excluded.is_active`,
               price: sql`excluded.price`,

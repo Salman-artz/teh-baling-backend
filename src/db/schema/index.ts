@@ -2,7 +2,7 @@ export * from './user.js';
 export * from './tea-series.js';
 export * from './tea-product.js';
 export * from './cup-type.js';
-export * from './product-cup-mapping.js';
+export * from './series-cup-mapping.js';
 export * from './booth.js';
 export * from './booth-assignment.js';
 export * from './daily-report.js';
