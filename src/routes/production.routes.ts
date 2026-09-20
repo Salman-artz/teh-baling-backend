@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, and } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import * as schema from '../db/schema/index.js';
 import { AppEnv, AuthContextUser, requireRole } from '../middleware/auth.middleware.js';
@@ -17,6 +17,22 @@ const productionReportUpdateSchema = z.object({
   notes: z.string().trim().optional().nullable(),
   staffId: z.string().uuid().optional(),
   reportDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Format tanggal YYYY-MM-DD').optional(),
+});
+
+const productionDeliveryCreateSchema = z.object({
+  boothId: z.string().uuid('ID booth wajib berupa UUID valid'),
+  totalLiters: z.coerce.number().positive('Total liter pengiriman teh wajib lebih besar dari 0'),
+  notes: z.string().trim().optional().nullable(),
+  staffId: z.string().uuid().optional(),
+  deliveryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Format tanggal YYYY-MM-DD').optional(),
+});
+
+const productionDeliveryUpdateSchema = z.object({
+  boothId: z.string().uuid('ID booth wajib berupa UUID valid').optional(),
+  totalLiters: z.coerce.number().positive('Total liter pengiriman teh wajib lebih besar dari 0').optional(),
+  notes: z.string().trim().optional().nullable(),
+  staffId: z.string().uuid().optional(),
+  deliveryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Format tanggal YYYY-MM-DD').optional(),
 });
 
 function getWibDateString(): string {
@@ -61,13 +77,63 @@ function isProductionOperatingHours(): boolean {
   return totalMinutes >= 5 * 60 && totalMinutes <= 21 * 60;
 }
 
+/**
+ * Menghitung rekapitulasi stok teh dapur (Dimasak vs Terkirim) pada tanggal tertentu
+ * Memastikan tidak terjadi defisit (pengiriman melebihi jumlah yang dimasak)
+ */
+async function getTeaStockSummary(targetDate: string, excludeDeliveryId?: string) {
+  // 1. Ambil semua sesi memasak pada tanggal tersebut
+  const cookingRecords = await db
+    .select({ totalLiters: schema.productionReports.totalLiters })
+    .from(schema.productionReports)
+    .where(eq(schema.productionReports.reportDate, targetDate));
+
+  const totalCooked = cookingRecords.reduce((acc, r) => acc + (parseFloat(r.totalLiters) || 0), 0);
+
+  // 2. Ambil semua pengiriman ke booth pada tanggal tersebut
+  const deliveryRecords = await db
+    .select({ id: schema.productionDeliveries.id, totalLiters: schema.productionDeliveries.totalLiters })
+    .from(schema.productionDeliveries)
+    .where(eq(schema.productionDeliveries.deliveryDate, targetDate));
+
+  const filteredDeliveries = excludeDeliveryId
+    ? deliveryRecords.filter((d) => d.id !== excludeDeliveryId)
+    : deliveryRecords;
+
+  const totalDelivered = filteredDeliveries.reduce((acc, d) => acc + (parseFloat(d.totalLiters) || 0), 0);
+  const remainingStock = Math.max(0, totalCooked - totalDelivered);
+
+  return {
+    date: targetDate,
+    totalCooked: Math.round(totalCooked * 100) / 100,
+    totalDelivered: Math.round(totalDelivered * 100) / 100,
+    remainingStock: Math.round(remainingStock * 100) / 100,
+  };
+}
+
 export const productionRouter = new Hono<AppEnv>();
+
+// GET /production-stock (Cek Stok Teh Dapur Hari Ini / Per Tanggal)
+productionRouter.get('/production-stock', requireRole('ADMIN', 'PRODUCTION'), async (c) => {
+  try {
+    const targetDate = c.req.query('date') || getWibDateString();
+    const stock = await getTeaStockSummary(targetDate);
+    return c.json({ success: true, data: stock });
+  } catch (err) {
+    console.error('[Get Production Stock Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal memuat info stok teh dapur' } }, 500);
+  }
+});
+
+// =============================================================================
+// PRODUCTION REPORTS (MEMASAK TEH DI DAPUR)
+// =============================================================================
 
 // POST /production-reports (Create - Production Staff & Admin)
 productionRouter.post('/production-reports', requireRole('ADMIN', 'PRODUCTION'), async (c) => {
   try {
     const user = c.get('user') as AuthContextUser;
-    
+
     // Staf produksi dibatasi jam operasional 05:00-21:00, Admin memiliki akses bypass kapan saja
     if (user.role === 'PRODUCTION' && !isProductionOperatingHours()) {
       return c.json(
@@ -187,6 +253,15 @@ productionRouter.patch('/production-reports/:id', requireRole('ADMIN'), async (c
       return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'ID laporan wajib disertakan' } }, 400);
     }
 
+    const [currentReport] = await db
+      .select()
+      .from(schema.productionReports)
+      .where(eq(schema.productionReports.id, id));
+
+    if (!currentReport) {
+      return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Laporan produksi tidak ditemukan' } }, 404);
+    }
+
     const rawBody = await c.req.json();
     const parseResult = productionReportUpdateSchema.safeParse(rawBody);
 
@@ -204,8 +279,42 @@ productionRouter.patch('/production-reports/:id', requireRole('ADMIN'), async (c
     }
 
     const { totalLiters, notes, staffId, reportDate } = parseResult.data;
-    const updateData: any = { updatedAt: new Date() };
+    const targetDate = reportDate || currentReport.reportDate;
+    const targetLiters = totalLiters !== undefined ? totalLiters : parseFloat(currentReport.totalLiters);
 
+    // Safeguard Defisit: Pastikan perubahan total masak tidak lebih kecil dari total yang sudah dikirim ke booth
+    const allCookings = await db
+      .select()
+      .from(schema.productionReports)
+      .where(eq(schema.productionReports.reportDate, targetDate));
+
+    const otherCooked = allCookings
+      .filter((r) => r.id !== id)
+      .reduce((acc, r) => acc + (parseFloat(r.totalLiters) || 0), 0);
+
+    const newTotalCooked = otherCooked + targetLiters;
+
+    const deliveries = await db
+      .select()
+      .from(schema.productionDeliveries)
+      .where(eq(schema.productionDeliveries.deliveryDate, targetDate));
+
+    const totalDelivered = deliveries.reduce((acc, d) => acc + (parseFloat(d.totalLiters) || 0), 0);
+
+    if (newTotalCooked < totalDelivered) {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'DEFICIT_NOT_ALLOWED',
+            message: `Perubahan ditolak: Total teh terkirim ke booth pada tanggal ${targetDate} sudah mencapai ${totalDelivered} Liter. Mengubah total memasak menjadi ${newTotalCooked} Liter akan menyebabkan defisit stok.`,
+          },
+        },
+        400
+      );
+    }
+
+    const updateData: any = { updatedAt: new Date() };
     if (totalLiters !== undefined) updateData.totalLiters = String(totalLiters);
     if (notes !== undefined) updateData.notes = notes ? notes.trim() : null;
     if (staffId !== undefined) updateData.staffId = staffId;
@@ -216,10 +325,6 @@ productionRouter.patch('/production-reports/:id', requireRole('ADMIN'), async (c
       .set(updateData)
       .where(eq(schema.productionReports.id, id))
       .returning();
-
-    if (!updated) {
-      return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Laporan produksi tidak ditemukan' } }, 404);
-    }
 
     return c.json({ success: true, data: updated, message: 'Laporan produksi berhasil diperbarui' });
   } catch (err) {
@@ -236,14 +341,50 @@ productionRouter.delete('/production-reports/:id', requireRole('ADMIN'), async (
       return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'ID laporan wajib disertakan' } }, 400);
     }
 
+    const [currentReport] = await db
+      .select()
+      .from(schema.productionReports)
+      .where(eq(schema.productionReports.id, id));
+
+    if (!currentReport) {
+      return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Laporan produksi tidak ditemukan' } }, 404);
+    }
+
+    // Safeguard Defisit: Pastikan penghapusan laporan masak tidak membuat total masak < total terkirim
+    const targetDate = currentReport.reportDate;
+    const allCookings = await db
+      .select()
+      .from(schema.productionReports)
+      .where(eq(schema.productionReports.reportDate, targetDate));
+
+    const remainingCooked = allCookings
+      .filter((r) => r.id !== id)
+      .reduce((acc, r) => acc + (parseFloat(r.totalLiters) || 0), 0);
+
+    const deliveries = await db
+      .select()
+      .from(schema.productionDeliveries)
+      .where(eq(schema.productionDeliveries.deliveryDate, targetDate));
+
+    const totalDelivered = deliveries.reduce((acc, d) => acc + (parseFloat(d.totalLiters) || 0), 0);
+
+    if (remainingCooked < totalDelivered) {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'DEFICIT_NOT_ALLOWED',
+            message: `Tidak dapat menghapus laporan memasak ini: Total teh terkirim ke booth pada tanggal ${targetDate} adalah ${totalDelivered} Liter. Menghapus sesi masak ini menyisakan ${remainingCooked} Liter yang akan menyebabkan defisit stok.`,
+          },
+        },
+        400
+      );
+    }
+
     const [deleted] = await db
       .delete(schema.productionReports)
       .where(eq(schema.productionReports.id, id))
       .returning();
-
-    if (!deleted) {
-      return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Laporan produksi tidak ditemukan' } }, 404);
-    }
 
     return c.json({ success: true, message: 'Laporan produksi berhasil dihapus' });
   } catch (err) {
@@ -255,22 +396,6 @@ productionRouter.delete('/production-reports/:id', requireRole('ADMIN'), async (
 // =============================================================================
 // PRODUCTION DELIVERIES (PENGIRIMAN TEH KE BOOTH)
 // =============================================================================
-
-const productionDeliveryCreateSchema = z.object({
-  boothId: z.string().uuid('ID booth wajib berupa UUID valid'),
-  totalLiters: z.coerce.number().positive('Total liter pengiriman teh wajib lebih besar dari 0'),
-  notes: z.string().trim().optional().nullable(),
-  staffId: z.string().uuid().optional(),
-  deliveryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Format tanggal YYYY-MM-DD').optional(),
-});
-
-const productionDeliveryUpdateSchema = z.object({
-  boothId: z.string().uuid('ID booth wajib berupa UUID valid').optional(),
-  totalLiters: z.coerce.number().positive('Total liter pengiriman teh wajib lebih besar dari 0').optional(),
-  notes: z.string().trim().optional().nullable(),
-  staffId: z.string().uuid().optional(),
-  deliveryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Format tanggal YYYY-MM-DD').optional(),
-});
 
 // POST /production-deliveries (Create Delivery - Production Staff & Admin)
 productionRouter.post('/production-deliveries', requireRole('ADMIN', 'PRODUCTION'), async (c) => {
@@ -311,7 +436,23 @@ productionRouter.post('/production-deliveries', requireRole('ADMIN', 'PRODUCTION
     const targetDate = deliveryDate || getWibDateString();
     const targetStaffId = (user.role === 'ADMIN' && staffId) ? staffId : user.id;
 
-    // Verifikasi booth tujuan aktif
+    // 1. Verifikasi stok teh yang tersedia di dapur (Total Dimasak vs Total Terkirim)
+    const stockSummary = await getTeaStockSummary(targetDate);
+
+    if (totalLiters > stockSummary.remainingStock) {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'INSUFFICIENT_STOCK',
+            message: `Stok teh dapur tidak mencukupi: Total dimasak hari ini (${targetDate}) adalah ${stockSummary.totalCooked} Liter (sudah terkirim ${stockSummary.totalDelivered} Liter, sisa stok ${stockSummary.remainingStock} Liter). Pengiriman ${totalLiters} Liter melebihi stok yang tersedia (tidak boleh defisit).`,
+          },
+        },
+        400
+      );
+    }
+
+    // 2. Verifikasi booth tujuan aktif
     const [booth] = await db
       .select()
       .from(schema.booths)
@@ -419,6 +560,15 @@ productionRouter.patch('/production-deliveries/:id', requireRole('ADMIN'), async
       return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'ID pengiriman wajib disertakan' } }, 400);
     }
 
+    const [currentDelivery] = await db
+      .select()
+      .from(schema.productionDeliveries)
+      .where(eq(schema.productionDeliveries.id, id));
+
+    if (!currentDelivery) {
+      return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Data pengiriman tidak ditemukan' } }, 404);
+    }
+
     const rawBody = await c.req.json();
     const parseResult = productionDeliveryUpdateSchema.safeParse(rawBody);
 
@@ -436,8 +586,26 @@ productionRouter.patch('/production-deliveries/:id', requireRole('ADMIN'), async
     }
 
     const { boothId, totalLiters, notes, staffId, deliveryDate } = parseResult.data;
-    const updateData: any = { updatedAt: new Date() };
+    const targetDate = deliveryDate || currentDelivery.deliveryDate;
+    const targetLiters = totalLiters !== undefined ? totalLiters : parseFloat(currentDelivery.totalLiters);
 
+    // Safeguard Defisit: Verifikasi stok teh tersedia mengecualikan pengiriman ini
+    const stockSummary = await getTeaStockSummary(targetDate, id);
+
+    if (targetLiters > stockSummary.remainingStock) {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'INSUFFICIENT_STOCK',
+            message: `Stok teh dapur tidak mencukupi: Total dimasak pada tanggal ${targetDate} adalah ${stockSummary.totalCooked} Liter (sudah terkirim ${stockSummary.totalDelivered} Liter, sisa stok ${stockSummary.remainingStock} Liter). Pengiriman ${targetLiters} Liter melebihi stok yang tersedia.`,
+          },
+        },
+        400
+      );
+    }
+
+    const updateData: any = { updatedAt: new Date() };
     if (boothId !== undefined) updateData.boothId = boothId;
     if (totalLiters !== undefined) updateData.totalLiters = String(totalLiters);
     if (notes !== undefined) updateData.notes = notes ? notes.trim() : null;
@@ -449,10 +617,6 @@ productionRouter.patch('/production-deliveries/:id', requireRole('ADMIN'), async
       .set(updateData)
       .where(eq(schema.productionDeliveries.id, id))
       .returning();
-
-    if (!updated) {
-      return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Data pengiriman tidak ditemukan' } }, 404);
-    }
 
     return c.json({ success: true, data: updated, message: 'Laporan pengiriman booth berhasil diperbarui' });
   } catch (err) {
@@ -484,4 +648,3 @@ productionRouter.delete('/production-deliveries/:id', requireRole('ADMIN'), asyn
     return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal menghapus data pengiriman' } }, 500);
   }
 });
-
