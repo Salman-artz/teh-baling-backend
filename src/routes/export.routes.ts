@@ -505,8 +505,14 @@ exportRouter.get('/export/production', requireRole('ADMIN', 'PRODUCTION'), async
       totCups += estCups;
 
       const timeStr = r.cookedAt
-        ? new Date(r.cookedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
-        : '08:00';
+        ? new Intl.DateTimeFormat('id-ID', {
+            timeZone: 'Asia/Jakarta',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false,
+          }).format(new Date(r.cookedAt)) + ' WIB'
+        : '08:00 WIB';
 
       return {
         no: idx + 1,

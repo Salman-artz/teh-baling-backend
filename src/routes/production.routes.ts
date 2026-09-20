@@ -10,6 +10,32 @@ const productionReportCreateSchema = z.object({
   notes: z.string().trim().optional().nullable(),
 });
 
+function getWibDateString(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const year = parts.find((p) => p.type === 'year')?.value;
+  const month = parts.find((p) => p.type === 'month')?.value;
+  const day = parts.find((p) => p.type === 'day')?.value;
+  return `${year}-${month}-${day}`;
+}
+
+function formatWibTime(date: Date | string): string {
+  const d = typeof date === 'string' ? new Date(date) : date;
+  return (
+    new Intl.DateTimeFormat('id-ID', {
+      timeZone: 'Asia/Jakarta',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(d) + ' WIB'
+  );
+}
+
 function isProductionOperatingHours(): boolean {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Jakarta',
@@ -62,7 +88,7 @@ productionRouter.post('/production-reports', requireRole('PRODUCTION'), async (c
     }
 
     const { totalLiters, notes } = parseResult.data;
-    const today: string = new Date().toISOString().split('T')[0]!;
+    const today = getWibDateString();
 
     const [report] = await db
       .insert(schema.productionReports)
@@ -104,9 +130,7 @@ productionRouter.get('/production-reports', requireRole('ADMIN', 'PRODUCTION'), 
       .orderBy(desc(schema.productionReports.createdAt));
 
     let formatted = dbReports.map((r) => {
-      const createdDate = new Date(r.createdAt);
-      const timeStr =
-        createdDate.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WIB';
+      const timeStr = formatWibTime(r.createdAt);
       return {
         id: r.id,
         date: r.reportDate,
@@ -129,7 +153,8 @@ productionRouter.get('/production-reports', requireRole('ADMIN', 'PRODUCTION'), 
         (r) =>
           r.notes.toLowerCase().includes(search) ||
           r.staffName.toLowerCase().includes(search) ||
-          r.date.includes(search)
+          r.date.includes(search) ||
+          r.time.toLowerCase().includes(search)
       );
     }
 
