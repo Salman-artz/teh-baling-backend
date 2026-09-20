@@ -22,8 +22,8 @@ function isProductionOperatingHours(): boolean {
   const minute = parseInt(parts.find((p) => p.type === 'minute')?.value || '0', 10);
   const totalMinutes = hour * 60 + minute;
 
-  // 05:00 WIB (300 mins) to 21:00 WIB (1260 mins)
-  return totalMinutes >= 5 * 60 && totalMinutes <= 21 * 60;
+  // 05:00 WIB (300 mins) to 23:59 WIB (1439 mins)
+  return totalMinutes >= 5 * 60 && totalMinutes <= 23 * 60 + 59;
 }
 
 export const productionRouter = new Hono<AppEnv>();
@@ -37,7 +37,7 @@ productionRouter.post('/production-reports', requireRole('PRODUCTION'), async (c
           success: false,
           error: {
             code: 'OUTSIDE_OPERATING_HOURS',
-            message: 'Akses Ditolak: Penginputan laporan memasak teh hanya dapat dilakukan pada jam operasional 05:00 - 21:00 WIB',
+            message: 'Akses Ditolak: Penginputan laporan memasak teh hanya dapat dilakukan pada jam operasional 05:00 - 23:59 WIB',
           },
         },
         403
