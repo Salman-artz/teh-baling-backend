@@ -6,17 +6,21 @@ import { AppEnv, requireRole } from '../middleware/auth.middleware.js';
 
 export const summaryRouter = new Hono<AppEnv>();
 
-// GET /dashboard/today
+// GET /dashboard/today (HANYA DARI BOOTH YANG AKTIF)
 summaryRouter.get('/dashboard/today', requireRole('ADMIN'), async (c) => {
   try {
     const today: string = new Date().toISOString().split('T')[0]!;
 
-    const allBooths = await db
+    // 1. Ambil hanya booth yang AKTIF
+    const activeBooths = await db
       .select()
       .from(schema.booths)
       .where(eq(schema.booths.isActive, true))
       .orderBy(desc(schema.booths.createdAt));
 
+    const activeBoothIds = new Set(activeBooths.map((b) => b.id));
+
+    // 2. Ambil laporan shift hari ini yang terhubung ke booth aktif
     const todayReports = await db
       .select({
         id: schema.dailyReports.id,
@@ -28,9 +32,11 @@ summaryRouter.get('/dashboard/today', requireRole('ADMIN'), async (c) => {
         attendantName: schema.users.name,
       })
       .from(schema.dailyReports)
+      .innerJoin(schema.booths, and(eq(schema.dailyReports.boothId, schema.booths.id), eq(schema.booths.isActive, true)))
       .leftJoin(schema.users, eq(schema.dailyReports.attendantId, schema.users.id))
       .where(eq(schema.dailyReports.reportDate, today));
 
+    // 3. Ambil jadwal penugasan hari ini yang terhubung ke booth aktif
     const todayAssignments = await db
       .select({
         boothId: schema.boothAssignments.boothId,
@@ -38,6 +44,7 @@ summaryRouter.get('/dashboard/today', requireRole('ADMIN'), async (c) => {
         shiftType: schema.boothAssignments.shiftType,
       })
       .from(schema.boothAssignments)
+      .innerJoin(schema.booths, and(eq(schema.boothAssignments.boothId, schema.booths.id), eq(schema.booths.isActive, true)))
       .leftJoin(schema.users, eq(schema.boothAssignments.userId, schema.users.id))
       .where(eq(schema.boothAssignments.assignmentDate, today));
 
@@ -50,7 +57,7 @@ summaryRouter.get('/dashboard/today', requireRole('ADMIN'), async (c) => {
     let totalRevenue = 0;
     let totalCupsSold = 0;
 
-    const boothsData = allBooths.map((b) => {
+    const boothsData = activeBooths.map((b) => {
       const rep = todayReports.find((r) => r.boothId === b.id);
       const assign = todayAssignments.find((a) => a.boothId === b.id);
 
@@ -85,7 +92,7 @@ summaryRouter.get('/dashboard/today', requireRole('ADMIN'), async (c) => {
       data: {
         totalRevenue,
         totalCupsSold,
-        activeBooths: allBooths.length,
+        activeBooths: activeBooths.length,
         booths: boothsData,
       },
     });
@@ -95,14 +102,26 @@ summaryRouter.get('/dashboard/today', requireRole('ADMIN'), async (c) => {
   }
 });
 
-// GET /dashboard/chart
+// GET /dashboard/chart (HANYA DARI BOOTH YANG AKTIF)
 summaryRouter.get('/dashboard/chart', requireRole('ADMIN'), async (c) => {
   try {
     const boothId = c.req.query('boothId') || 'ALL';
     const period = c.req.query('period') || 'hourly';
 
-    const allBooths = await db.select().from(schema.booths).where(eq(schema.booths.isActive, true));
-    const allReports = await db.select().from(schema.dailyReports);
+    const activeBooths = await db.select().from(schema.booths).where(eq(schema.booths.isActive, true));
+    const activeBoothIds = new Set(activeBooths.map((b) => b.id));
+
+    const allReports = await db
+      .select({
+        id: schema.dailyReports.id,
+        boothId: schema.dailyReports.boothId,
+        reportDate: schema.dailyReports.reportDate,
+        cashModal: schema.dailyReports.cashModal,
+        cashFinal: schema.dailyReports.cashFinal,
+        status: schema.dailyReports.status,
+      })
+      .from(schema.dailyReports)
+      .innerJoin(schema.booths, and(eq(schema.dailyReports.boothId, schema.booths.id), eq(schema.booths.isActive, true)));
 
     if (period === 'hourly') {
       const timeSlots = ['08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00'];
@@ -215,7 +234,7 @@ summaryRouter.get('/dashboard/chart', requireRole('ADMIN'), async (c) => {
   }
 });
 
-// GET /dashboard/summary-table
+// GET /dashboard/summary-table (HANYA DARI BOOTH YANG AKTIF)
 summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN'), async (c) => {
   try {
     const fromDate = c.req.query('from');
@@ -233,7 +252,7 @@ summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN'), async (c) =>
         status: schema.dailyReports.status,
       })
       .from(schema.dailyReports)
-      .leftJoin(schema.booths, eq(schema.dailyReports.boothId, schema.booths.id))
+      .innerJoin(schema.booths, and(eq(schema.dailyReports.boothId, schema.booths.id), eq(schema.booths.isActive, true)))
       .orderBy(desc(schema.dailyReports.reportDate), desc(schema.dailyReports.createdAt));
 
     let filtered = dbReports;
@@ -270,7 +289,7 @@ summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN'), async (c) =>
   }
 });
 
-// GET /dashboard/booth-comparison
+// GET /dashboard/booth-comparison (HANYA DARI BOOTH YANG AKTIF)
 summaryRouter.get('/dashboard/booth-comparison', requireRole('ADMIN'), async (c) => {
   try {
     const range = c.req.query('range') || 'today';
@@ -282,7 +301,19 @@ summaryRouter.get('/dashboard/booth-comparison', requireRole('ADMIN'), async (c)
       .where(eq(schema.booths.isActive, true))
       .orderBy(desc(schema.booths.createdAt));
 
-    let allReports = await db.select().from(schema.dailyReports);
+    const activeBoothIds = new Set(allBooths.map((b) => b.id));
+
+    let allReports = await db
+      .select({
+        id: schema.dailyReports.id,
+        boothId: schema.dailyReports.boothId,
+        reportDate: schema.dailyReports.reportDate,
+        cashModal: schema.dailyReports.cashModal,
+        cashFinal: schema.dailyReports.cashFinal,
+        status: schema.dailyReports.status,
+      })
+      .from(schema.dailyReports)
+      .innerJoin(schema.booths, and(eq(schema.dailyReports.boothId, schema.booths.id), eq(schema.booths.isActive, true)));
 
     if (range === 'today') {
       allReports = allReports.filter((r) => r.reportDate === today);

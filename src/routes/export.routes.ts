@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, and } from 'drizzle-orm';
 import ExcelJS from 'exceljs';
 import { db } from '../db/index.js';
 import * as schema from '../db/schema/index.js';
@@ -171,7 +171,7 @@ exportRouter.get('/export/sales', requireRole('ADMIN'), async (c) => {
           status: schema.dailyReports.status,
         })
         .from(schema.dailyReports)
-        .leftJoin(schema.booths, eq(schema.dailyReports.boothId, schema.booths.id))
+        .innerJoin(schema.booths, and(eq(schema.dailyReports.boothId, schema.booths.id), eq(schema.booths.isActive, true)))
         .leftJoin(schema.users, eq(schema.dailyReports.attendantId, schema.users.id))
         .orderBy(desc(schema.dailyReports.reportDate));
 
