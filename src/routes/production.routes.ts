@@ -251,3 +251,237 @@ productionRouter.delete('/production-reports/:id', requireRole('ADMIN'), async (
     return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal menghapus laporan produksi' } }, 500);
   }
 });
+
+// =============================================================================
+// PRODUCTION DELIVERIES (PENGIRIMAN TEH KE BOOTH)
+// =============================================================================
+
+const productionDeliveryCreateSchema = z.object({
+  boothId: z.string().uuid('ID booth wajib berupa UUID valid'),
+  totalLiters: z.coerce.number().positive('Total liter pengiriman teh wajib lebih besar dari 0'),
+  notes: z.string().trim().optional().nullable(),
+  staffId: z.string().uuid().optional(),
+  deliveryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Format tanggal YYYY-MM-DD').optional(),
+});
+
+const productionDeliveryUpdateSchema = z.object({
+  boothId: z.string().uuid('ID booth wajib berupa UUID valid').optional(),
+  totalLiters: z.coerce.number().positive('Total liter pengiriman teh wajib lebih besar dari 0').optional(),
+  notes: z.string().trim().optional().nullable(),
+  staffId: z.string().uuid().optional(),
+  deliveryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Format tanggal YYYY-MM-DD').optional(),
+});
+
+// POST /production-deliveries (Create Delivery - Production Staff & Admin)
+productionRouter.post('/production-deliveries', requireRole('ADMIN', 'PRODUCTION'), async (c) => {
+  try {
+    const user = c.get('user') as AuthContextUser;
+
+    // Staf produksi dibatasi jam operasional 05:00-21:00, Admin memiliki akses bypass kapan saja
+    if (user.role === 'PRODUCTION' && !isProductionOperatingHours()) {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'OUTSIDE_OPERATING_HOURS',
+            message: 'Akses Ditolak: Penginputan pengiriman teh hanya dapat dilakukan pada jam operasional 05:00 - 21:00 WIB',
+          },
+        },
+        403
+      );
+    }
+
+    const rawBody = await c.req.json();
+    const parseResult = productionDeliveryCreateSchema.safeParse(rawBody);
+
+    if (!parseResult.success) {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: parseResult.error.errors.map((e) => e.message).join(', '),
+          },
+        },
+        400
+      );
+    }
+
+    const { boothId, totalLiters, notes, staffId, deliveryDate } = parseResult.data;
+    const targetDate = deliveryDate || getWibDateString();
+    const targetStaffId = (user.role === 'ADMIN' && staffId) ? staffId : user.id;
+
+    // Verifikasi booth tujuan aktif
+    const [booth] = await db
+      .select()
+      .from(schema.booths)
+      .where(eq(schema.booths.id, boothId));
+
+    if (!booth) {
+      return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Booth tujuan tidak ditemukan' } }, 404);
+    }
+
+    const [delivery] = await db
+      .insert(schema.productionDeliveries)
+      .values({
+        staffId: targetStaffId,
+        boothId: boothId,
+        deliveryDate: targetDate,
+        totalLiters: String(totalLiters),
+        notes: notes || null,
+      })
+      .returning();
+
+    return c.json({ success: true, data: delivery, message: 'Laporan pengiriman teh ke booth berhasil dicatat' }, 201);
+  } catch (err) {
+    console.error('[Production Delivery Create Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal menyimpan laporan pengiriman ke booth' } }, 500);
+  }
+});
+
+// GET /production-deliveries (List Deliveries - Admin & Production Staff)
+productionRouter.get('/production-deliveries', requireRole('ADMIN', 'PRODUCTION'), async (c) => {
+  try {
+    const fromDate = c.req.query('fromDate');
+    const toDate = c.req.query('toDate');
+    const boothId = c.req.query('boothId');
+    const search = (c.req.query('search') || '').toLowerCase().trim();
+
+    const dbDeliveries = await db
+      .select({
+        id: schema.productionDeliveries.id,
+        staffId: schema.productionDeliveries.staffId,
+        boothId: schema.productionDeliveries.boothId,
+        deliveryDate: schema.productionDeliveries.deliveryDate,
+        totalLiters: schema.productionDeliveries.totalLiters,
+        notes: schema.productionDeliveries.notes,
+        createdAt: schema.productionDeliveries.createdAt,
+        staffName: schema.users.name,
+        staffEmail: schema.users.email,
+        boothName: schema.booths.name,
+        boothAddress: schema.booths.address,
+      })
+      .from(schema.productionDeliveries)
+      .leftJoin(schema.users, eq(schema.productionDeliveries.staffId, schema.users.id))
+      .leftJoin(schema.booths, eq(schema.productionDeliveries.boothId, schema.booths.id))
+      .orderBy(desc(schema.productionDeliveries.createdAt));
+
+    let formatted = dbDeliveries.map((d) => {
+      const timeStr = formatWibTime(d.createdAt);
+      return {
+        id: d.id,
+        staffId: d.staffId,
+        boothId: d.boothId,
+        date: d.deliveryDate,
+        time: timeStr,
+        staffName: d.staffName ? `${d.staffName}` : 'Staf Dapur',
+        staffEmail: d.staffEmail || '',
+        boothName: d.boothName || 'Booth Teh Baling',
+        boothAddress: d.boothAddress || '-',
+        liters: parseFloat(d.totalLiters) || 0,
+        notes: d.notes || '-',
+        status: 'Terkirim ke Booth',
+      };
+    });
+
+    if (fromDate) {
+      formatted = formatted.filter((d) => d.date >= fromDate);
+    }
+    if (toDate) {
+      formatted = formatted.filter((d) => d.date <= toDate);
+    }
+    if (boothId && boothId !== 'ALL') {
+      formatted = formatted.filter((d) => d.boothId === boothId);
+    }
+    if (search) {
+      formatted = formatted.filter(
+        (d) =>
+          d.notes.toLowerCase().includes(search) ||
+          d.staffName.toLowerCase().includes(search) ||
+          d.boothName.toLowerCase().includes(search) ||
+          d.date.includes(search) ||
+          d.time.toLowerCase().includes(search)
+      );
+    }
+
+    return c.json({ success: true, data: formatted });
+  } catch (err) {
+    console.error('[Get Production Deliveries Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal memuat rekap laporan pengiriman booth' } }, 500);
+  }
+});
+
+// PATCH /production-deliveries/:id (Update Delivery - Admin Only)
+productionRouter.patch('/production-deliveries/:id', requireRole('ADMIN'), async (c) => {
+  try {
+    const id = c.req.param('id');
+    if (!id) {
+      return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'ID pengiriman wajib disertakan' } }, 400);
+    }
+
+    const rawBody = await c.req.json();
+    const parseResult = productionDeliveryUpdateSchema.safeParse(rawBody);
+
+    if (!parseResult.success) {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: parseResult.error.errors.map((e) => e.message).join(', '),
+          },
+        },
+        400
+      );
+    }
+
+    const { boothId, totalLiters, notes, staffId, deliveryDate } = parseResult.data;
+    const updateData: any = { updatedAt: new Date() };
+
+    if (boothId !== undefined) updateData.boothId = boothId;
+    if (totalLiters !== undefined) updateData.totalLiters = String(totalLiters);
+    if (notes !== undefined) updateData.notes = notes ? notes.trim() : null;
+    if (staffId !== undefined) updateData.staffId = staffId;
+    if (deliveryDate !== undefined) updateData.deliveryDate = deliveryDate;
+
+    const [updated] = await db
+      .update(schema.productionDeliveries)
+      .set(updateData)
+      .where(eq(schema.productionDeliveries.id, id))
+      .returning();
+
+    if (!updated) {
+      return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Data pengiriman tidak ditemukan' } }, 404);
+    }
+
+    return c.json({ success: true, data: updated, message: 'Laporan pengiriman booth berhasil diperbarui' });
+  } catch (err) {
+    console.error('[Update Production Delivery Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal memperbarui data pengiriman' } }, 500);
+  }
+});
+
+// DELETE /production-deliveries/:id (Delete Delivery - Admin Only)
+productionRouter.delete('/production-deliveries/:id', requireRole('ADMIN'), async (c) => {
+  try {
+    const id = c.req.param('id');
+    if (!id) {
+      return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'ID pengiriman wajib disertakan' } }, 400);
+    }
+
+    const [deleted] = await db
+      .delete(schema.productionDeliveries)
+      .where(eq(schema.productionDeliveries.id, id))
+      .returning();
+
+    if (!deleted) {
+      return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Data pengiriman tidak ditemukan' } }, 404);
+    }
+
+    return c.json({ success: true, message: 'Laporan pengiriman booth berhasil dihapus' });
+  } catch (err) {
+    console.error('[Delete Production Delivery Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal menghapus data pengiriman' } }, 500);
+  }
+});
+

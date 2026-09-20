@@ -187,6 +187,20 @@ async function migrateAndSeed() {
       );
     `;
 
+    // production_deliveries
+    await sql`
+      CREATE TABLE IF NOT EXISTS production_deliveries (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        staff_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+        booth_id UUID NOT NULL REFERENCES booths(id) ON DELETE RESTRICT,
+        delivery_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        total_liters NUMERIC(8, 2) NOT NULL CHECK (total_liters > 0),
+        notes TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `;
+
     console.log('3. Seeding Initial Data into Aiven PostgreSQL...');
     const defaultPassword = 'password123';
     const passwordHash = await bcrypt.hash(defaultPassword, 10);

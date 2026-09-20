@@ -561,3 +561,108 @@ exportRouter.get('/export/production', requireRole('ADMIN', 'PRODUCTION'), async
     return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal membuat file export produksi' } }, 500);
   }
 });
+
+// GET /export/production-deliveries
+exportRouter.get('/export/production-deliveries', requireRole('ADMIN', 'PRODUCTION'), async (c) => {
+  try {
+    const { from, to, boothId } = c.req.query();
+    const today = new Date().toISOString().split('T')[0];
+    const fromDate = from || '2026-09-01';
+    const toDate = to || today;
+
+    let deliveries: any[] = [];
+    try {
+      deliveries = await db
+        .select({
+          id: schema.productionDeliveries.id,
+          deliveryDate: schema.productionDeliveries.deliveryDate,
+          deliveredAt: schema.productionDeliveries.createdAt,
+          totalLiters: schema.productionDeliveries.totalLiters,
+          notes: schema.productionDeliveries.notes,
+          staffName: schema.users.name,
+          boothId: schema.productionDeliveries.boothId,
+          boothName: schema.booths.name,
+          boothAddress: schema.booths.address,
+        })
+        .from(schema.productionDeliveries)
+        .leftJoin(schema.users, eq(schema.productionDeliveries.staffId, schema.users.id))
+        .leftJoin(schema.booths, eq(schema.productionDeliveries.boothId, schema.booths.id))
+        .orderBy(desc(schema.productionDeliveries.createdAt));
+    } catch (dbErr) {
+      console.warn('[DB Export Deliveries]:', dbErr);
+    }
+
+    if (from) {
+      deliveries = deliveries.filter((d) => d.deliveryDate >= from);
+    }
+    if (to) {
+      deliveries = deliveries.filter((d) => d.deliveryDate <= to);
+    }
+    if (boothId && boothId !== 'ALL') {
+      deliveries = deliveries.filter((d) => d.boothId === boothId);
+    }
+
+    let totLiters = 0;
+    const rows = deliveries.map((d, idx) => {
+      const liters = parseFloat(d.totalLiters || '0');
+      totLiters += liters;
+
+      const timeStr = d.deliveredAt
+        ? new Intl.DateTimeFormat('id-ID', {
+            timeZone: 'Asia/Jakarta',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false,
+          }).format(new Date(d.deliveredAt)) + ' WIB'
+        : '08:00 WIB';
+
+      return {
+        no: idx + 1,
+        date: d.deliveryDate || today,
+        time: timeStr,
+        boothName: d.boothName || 'Booth Teh Baling',
+        boothAddress: d.boothAddress || '-',
+        staffName: d.staffName || 'Staf Dapur',
+        liters,
+        notes: d.notes || '-',
+        status: 'Terkirim ke Booth',
+      };
+    });
+
+    const workbook = createStyledExcelWorkbook({
+      sheetName: 'Laporan Pengiriman Booth',
+      reportTitle: 'Laporan Distribusi Pengiriman Teh Dapur ke Outlet Booth',
+      subtitle: `Periode: ${fromDate} s/d ${toDate} | Dicetak pada: ${new Date().toLocaleString('id-ID')} | Total Pengiriman: ${deliveries.length} Sesi`,
+      columns: [
+        { header: 'No', key: 'no', width: 6, align: 'center' },
+        { header: 'Tanggal', key: 'date', width: 14, align: 'center' },
+        { header: 'Jam Kirim', key: 'time', width: 14, align: 'center' },
+        { header: 'Nama Booth Tujuan', key: 'boothName', width: 24, align: 'left' },
+        { header: 'Lokasi Booth', key: 'boothAddress', width: 28, align: 'left' },
+        { header: 'Staf Pengirim', key: 'staffName', width: 20, align: 'left' },
+        { header: 'Jumlah Teh (Liter)', key: 'liters', width: 20, align: 'right', numFmt: '#,##0.0" Liter"' },
+        { header: 'Catatan Pengiriman', key: 'notes', width: 30, align: 'left' },
+        { header: 'Status', key: 'status', width: 18, align: 'center' },
+      ],
+      rows,
+      totalRow: {
+        labelColIndex: 6,
+        label: 'TOTAL DISTRIBUSI',
+        values: {
+          liters: totLiters,
+        },
+      },
+    });
+
+    c.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    c.header('Content-Disposition', `attachment; filename="Laporan_Pengiriman_Teh_${fromDate}_sd_${toDate}.xlsx"`);
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    return c.body(buffer as any);
+  } catch (err) {
+    console.error('[Export Production Deliveries Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal membuat file export pengiriman' } }, 500);
+  }
+});
+

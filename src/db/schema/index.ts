@@ -9,3 +9,4 @@ export * from './daily-report.js';
 export * from './report-stock-item.js';
 export * from './report-sale-item.js';
 export * from './production-report.js';
+export * from './production-delivery.js';
