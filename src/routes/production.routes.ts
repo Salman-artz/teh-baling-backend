@@ -8,6 +8,15 @@ import { AppEnv, AuthContextUser, requireRole } from '../middleware/auth.middlew
 const productionReportCreateSchema = z.object({
   totalLiters: z.coerce.number().positive('Total liter teh wajib lebih besar dari 0'),
   notes: z.string().trim().optional().nullable(),
+  staffId: z.string().uuid().optional(),
+  reportDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Format tanggal YYYY-MM-DD').optional(),
+});
+
+const productionReportUpdateSchema = z.object({
+  totalLiters: z.coerce.number().positive('Total liter teh wajib lebih besar dari 0').optional(),
+  notes: z.string().trim().optional().nullable(),
+  staffId: z.string().uuid().optional(),
+  reportDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Format tanggal YYYY-MM-DD').optional(),
 });
 
 function getWibDateString(): string {
@@ -54,10 +63,13 @@ function isProductionOperatingHours(): boolean {
 
 export const productionRouter = new Hono<AppEnv>();
 
-// POST /production-reports
-productionRouter.post('/production-reports', requireRole('PRODUCTION'), async (c) => {
+// POST /production-reports (Create - Production Staff & Admin)
+productionRouter.post('/production-reports', requireRole('ADMIN', 'PRODUCTION'), async (c) => {
   try {
-    if (!isProductionOperatingHours()) {
+    const user = c.get('user') as AuthContextUser;
+    
+    // Staf produksi dibatasi jam operasional 05:00-21:00, Admin memiliki akses bypass kapan saja
+    if (user.role === 'PRODUCTION' && !isProductionOperatingHours()) {
       return c.json(
         {
           success: false,
@@ -70,7 +82,6 @@ productionRouter.post('/production-reports', requireRole('PRODUCTION'), async (c
       );
     }
 
-    const user = c.get('user') as AuthContextUser;
     const rawBody = await c.req.json();
     const parseResult = productionReportCreateSchema.safeParse(rawBody);
 
@@ -87,27 +98,28 @@ productionRouter.post('/production-reports', requireRole('PRODUCTION'), async (c
       );
     }
 
-    const { totalLiters, notes } = parseResult.data;
-    const today = getWibDateString();
+    const { totalLiters, notes, staffId, reportDate } = parseResult.data;
+    const targetDate = reportDate || getWibDateString();
+    const targetStaffId = (user.role === 'ADMIN' && staffId) ? staffId : user.id;
 
     const [report] = await db
       .insert(schema.productionReports)
       .values({
-        staffId: user.id,
-        reportDate: today,
+        staffId: targetStaffId,
+        reportDate: targetDate,
         totalLiters: String(totalLiters),
         notes: notes || null,
       })
       .returning();
 
-    return c.json({ success: true, data: report });
+    return c.json({ success: true, data: report }, 201);
   } catch (err) {
-    console.error('[Production Report Error]:', err);
+    console.error('[Production Report Create Error]:', err);
     return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal menyimpan laporan produksi' } }, 500);
   }
 });
 
-// GET /production-reports
+// GET /production-reports (Read List)
 productionRouter.get('/production-reports', requireRole('ADMIN', 'PRODUCTION'), async (c) => {
   try {
     const fromDate = c.req.query('fromDate');
@@ -133,9 +145,11 @@ productionRouter.get('/production-reports', requireRole('ADMIN', 'PRODUCTION'), 
       const timeStr = formatWibTime(r.createdAt);
       return {
         id: r.id,
+        staffId: r.staffId,
         date: r.reportDate,
         time: timeStr,
-        staffName: r.staffName ? `${r.staffName} (${r.staffEmail})` : 'Staf Dapur',
+        staffName: r.staffName ? `${r.staffName}` : 'Staf Dapur',
+        staffEmail: r.staffEmail || '',
         liters: parseFloat(r.totalLiters) || 0,
         notes: r.notes || '-',
         status: 'Selesai Dimasak',
@@ -162,5 +176,78 @@ productionRouter.get('/production-reports', requireRole('ADMIN', 'PRODUCTION'), 
   } catch (err) {
     console.error('[Get Production Reports Error]:', err);
     return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal memuat rekap laporan produksi' } }, 500);
+  }
+});
+
+// PATCH /production-reports/:id (Update - Admin Only)
+productionRouter.patch('/production-reports/:id', requireRole('ADMIN'), async (c) => {
+  try {
+    const id = c.req.param('id');
+    if (!id) {
+      return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'ID laporan wajib disertakan' } }, 400);
+    }
+
+    const rawBody = await c.req.json();
+    const parseResult = productionReportUpdateSchema.safeParse(rawBody);
+
+    if (!parseResult.success) {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: parseResult.error.errors.map((e) => e.message).join(', '),
+          },
+        },
+        400
+      );
+    }
+
+    const { totalLiters, notes, staffId, reportDate } = parseResult.data;
+    const updateData: any = { updatedAt: new Date() };
+
+    if (totalLiters !== undefined) updateData.totalLiters = String(totalLiters);
+    if (notes !== undefined) updateData.notes = notes ? notes.trim() : null;
+    if (staffId !== undefined) updateData.staffId = staffId;
+    if (reportDate !== undefined) updateData.reportDate = reportDate;
+
+    const [updated] = await db
+      .update(schema.productionReports)
+      .set(updateData)
+      .where(eq(schema.productionReports.id, id))
+      .returning();
+
+    if (!updated) {
+      return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Laporan produksi tidak ditemukan' } }, 404);
+    }
+
+    return c.json({ success: true, data: updated, message: 'Laporan produksi berhasil diperbarui' });
+  } catch (err) {
+    console.error('[Update Production Report Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal memperbarui laporan produksi' } }, 500);
+  }
+});
+
+// DELETE /production-reports/:id (Delete - Admin Only)
+productionRouter.delete('/production-reports/:id', requireRole('ADMIN'), async (c) => {
+  try {
+    const id = c.req.param('id');
+    if (!id) {
+      return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'ID laporan wajib disertakan' } }, 400);
+    }
+
+    const [deleted] = await db
+      .delete(schema.productionReports)
+      .where(eq(schema.productionReports.id, id))
+      .returning();
+
+    if (!deleted) {
+      return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Laporan produksi tidak ditemukan' } }, 404);
+    }
+
+    return c.json({ success: true, message: 'Laporan produksi berhasil dihapus' });
+  } catch (err) {
+    console.error('[Delete Production Report Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal menghapus laporan produksi' } }, 500);
   }
 });
