@@ -10,6 +10,7 @@ export const dailyReports = pgTable('daily_reports', {
   shiftType: varchar('shift_type', { length: 10 }).default('PAGI').notNull(),
   cashModal: integer('cash_modal').notNull().default(0),
   cashFinal: integer('cash_final'),
+  teaRemainingLiters: numeric('tea_remaining_liters', { precision: 8, scale: 2 }).default('0'),
   notes: text('notes'),
   gpsLatStart: numeric('gps_lat_start', { precision: 10, scale: 7 }),
   gpsLngStart: numeric('gps_lng_start', { precision: 10, scale: 7 }),

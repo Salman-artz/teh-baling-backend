@@ -131,6 +131,7 @@ async function migrateAndSeed() {
         report_date DATE NOT NULL DEFAULT CURRENT_DATE,
         cash_modal INT NOT NULL DEFAULT 0,
         cash_final INT,
+        tea_remaining_liters NUMERIC(8, 2) DEFAULT 0,
         notes TEXT,
         gps_lat_start NUMERIC(10, 7),
         gps_lng_start NUMERIC(10, 7),

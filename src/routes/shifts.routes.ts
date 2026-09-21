@@ -42,6 +42,7 @@ const dailyReportEndSchema = z.object({
       })
     )
     .optional(),
+  teaRemainingLiters: z.coerce.number().min(0, 'Sisa teh tidak boleh bernilai negatif').optional(),
   notes: z.string().trim().optional().nullable(),
   gpsLatitude: z.coerce.number().nullable().optional(),
   gpsLongitude: z.coerce.number().nullable().optional(),
@@ -86,6 +87,7 @@ shiftsRouter.get('/daily-reports/today', requireRole('BOOTH_ATTENDANT'), async (
         shiftType: schema.dailyReports.shiftType,
         cashModal: schema.dailyReports.cashModal,
         cashFinal: schema.dailyReports.cashFinal,
+        teaRemainingLiters: schema.dailyReports.teaRemainingLiters,
         status: schema.dailyReports.status,
         gpsTimeStart: schema.dailyReports.gpsTimeStart,
         gpsTimeEnd: schema.dailyReports.gpsTimeEnd,
@@ -117,6 +119,7 @@ shiftsRouter.get('/daily-reports/today', requireRole('BOOTH_ATTENDANT'), async (
       data: {
         ...todayReport,
         reportDate: normalizeDate(todayReport.reportDate),
+        teaRemainingLiters: parseFloat(todayReport.teaRemainingLiters || '0') || 0,
         stockItems: stockItems.map((s) => ({
           cupTypeId: s.cupTypeId,
           qtyInitial: s.qtyInitial,
@@ -315,7 +318,7 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
       );
     }
 
-    const { cashFinal, stockItems, saleItems, notes, gpsLatitude, gpsLongitude, gpsAccuracy } = parseResult.data;
+    const { cashFinal, stockItems, saleItems, teaRemainingLiters, notes, gpsLatitude, gpsLongitude, gpsAccuracy } = parseResult.data;
     const today = getWibDateString();
 
     const normalizeDate = (d: unknown): string => {
@@ -391,11 +394,14 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
 
     let finalReport;
 
+    const remainingTeaVal = teaRemainingLiters !== undefined ? String(teaRemainingLiters) : '0';
+
     if (existingReport) {
       const [updated] = await db
         .update(schema.dailyReports)
         .set({
           cashFinal,
+          teaRemainingLiters: remainingTeaVal,
           notes: notes || null,
           gpsLatEnd: gpsLatitude !== undefined && gpsLatitude !== null ? String(gpsLatitude) : null,
           gpsLngEnd: gpsLongitude !== undefined && gpsLongitude !== null ? String(gpsLongitude) : null,
@@ -427,6 +433,7 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
           shiftType: assignment?.shiftType || 'PAGI',
           cashModal: 50000,
           cashFinal,
+          teaRemainingLiters: remainingTeaVal,
           notes: notes || null,
           gpsLatEnd: gpsLatitude !== undefined && gpsLatitude !== null ? String(gpsLatitude) : null,
           gpsLngEnd: gpsLongitude !== undefined && gpsLongitude !== null ? String(gpsLongitude) : null,
@@ -438,6 +445,7 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
           target: [schema.dailyReports.boothId, schema.dailyReports.reportDate],
           set: {
             cashFinal,
+            teaRemainingLiters: remainingTeaVal,
             notes: notes || null,
             status: 'CLOSED',
             updatedAt: new Date(),

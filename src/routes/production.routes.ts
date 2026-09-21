@@ -77,12 +77,54 @@ function isProductionOperatingHours(): boolean {
   return totalMinutes >= 5 * 60 && totalMinutes <= 21 * 60;
 }
 
+function getPreviousWibDate(dateStr: string): string {
+  const parts = dateStr.split('-').map((n) => parseInt(n, 10));
+  const y = parts[0] ?? 2026;
+  const m = parts[1] ?? 1;
+  const d = parts[2] ?? 1;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() - 1);
+  return dt.toISOString().split('T')[0]!;
+}
+
 /**
- * Menghitung rekapitulasi stok teh dapur (Dimasak vs Terkirim) pada tanggal tertentu
- * Memastikan tidak terjadi defisit (pengiriman melebihi jumlah yang dimasak)
+ * Menghitung rekapitulasi stok teh dapur (Stok Awal Bawaan Kemarin + Dimasak Hari Ini - Terkirim Hari Ini)
+ * Stok Awal = Sisa Teh Dapur Kemarin yang belum dikirim + Total Sisa Teh dari semua Booth kemarin sore
+ * Memastikan tidak terjadi defisit (pengiriman melebihi total stok yang tersedia)
  */
 async function getTeaStockSummary(targetDate: string, excludeDeliveryId?: string) {
-  // 1. Ambil semua sesi memasak pada tanggal tersebut
+  const yesterdayDate = getPreviousWibDate(targetDate);
+
+  // 1. Sisa Teh Dapur Kemarin yang belum terkirim
+  const yesterdayCookings = await db
+    .select({ totalLiters: schema.productionReports.totalLiters })
+    .from(schema.productionReports)
+    .where(eq(schema.productionReports.reportDate, yesterdayDate));
+  const totalCookedYesterday = yesterdayCookings.reduce((acc, r) => acc + (parseFloat(r.totalLiters) || 0), 0);
+
+  const yesterdayDeliveries = await db
+    .select({ totalLiters: schema.productionDeliveries.totalLiters })
+    .from(schema.productionDeliveries)
+    .where(eq(schema.productionDeliveries.deliveryDate, yesterdayDate));
+  const totalDeliveredYesterday = yesterdayDeliveries.reduce((acc, d) => acc + (parseFloat(d.totalLiters) || 0), 0);
+
+  const unsentKitchenYesterday = Math.max(0, totalCookedYesterday - totalDeliveredYesterday);
+
+  // 2. Sisa Teh dari Booth-Booth Kemarin (diinput attendant saat tutup shift sore)
+  const yesterdayBoothReports = await db
+    .select({ teaRemainingLiters: schema.dailyReports.teaRemainingLiters })
+    .from(schema.dailyReports)
+    .where(eq(schema.dailyReports.reportDate, yesterdayDate));
+
+  const totalBoothLeftoverYesterday = yesterdayBoothReports.reduce(
+    (acc, r) => acc + (parseFloat(r.teaRemainingLiters || '0') || 0),
+    0
+  );
+
+  // 3. Stok Awal Hari Ini (Bawaan Kemarin: Dapur + Booth)
+  const initialStock = unsentKitchenYesterday + totalBoothLeftoverYesterday;
+
+  // 4. Semua sesi memasak hari ini
   const cookingRecords = await db
     .select({ totalLiters: schema.productionReports.totalLiters })
     .from(schema.productionReports)
@@ -90,7 +132,7 @@ async function getTeaStockSummary(targetDate: string, excludeDeliveryId?: string
 
   const totalCooked = cookingRecords.reduce((acc, r) => acc + (parseFloat(r.totalLiters) || 0), 0);
 
-  // 2. Ambil semua pengiriman ke booth pada tanggal tersebut
+  // 5. Semua pengiriman ke booth hari ini
   const deliveryRecords = await db
     .select({ id: schema.productionDeliveries.id, totalLiters: schema.productionDeliveries.totalLiters })
     .from(schema.productionDeliveries)
@@ -101,12 +143,18 @@ async function getTeaStockSummary(targetDate: string, excludeDeliveryId?: string
     : deliveryRecords;
 
   const totalDelivered = filteredDeliveries.reduce((acc, d) => acc + (parseFloat(d.totalLiters) || 0), 0);
-  const remainingStock = Math.max(0, totalCooked - totalDelivered);
+  const totalAvailable = initialStock + totalCooked;
+  const remainingStock = Math.max(0, totalAvailable - totalDelivered);
 
   return {
     date: targetDate,
+    yesterdayDate,
+    initialStock: Math.round(initialStock * 100) / 100,
+    initialKitchenStock: Math.round(unsentKitchenYesterday * 100) / 100,
+    initialBoothStock: Math.round(totalBoothLeftoverYesterday * 100) / 100,
     totalCooked: Math.round(totalCooked * 100) / 100,
     totalDelivered: Math.round(totalDelivered * 100) / 100,
+    totalAvailableStock: Math.round(totalAvailable * 100) / 100,
     remainingStock: Math.round(remainingStock * 100) / 100,
   };
 }
@@ -282,7 +330,10 @@ productionRouter.patch('/production-reports/:id', requireRole('ADMIN'), async (c
     const targetDate = reportDate || currentReport.reportDate;
     const targetLiters = totalLiters !== undefined ? totalLiters : parseFloat(currentReport.totalLiters);
 
-    // Safeguard Defisit: Pastikan perubahan total masak tidak lebih kecil dari total yang sudah dikirim ke booth
+    // Safeguard Defisit: Pastikan perubahan total masak tidak membuat total stok (Awal + Masak) < Total Terkirim
+    const stockSummary = await getTeaStockSummary(targetDate);
+    const initialStock = stockSummary.initialStock;
+
     const allCookings = await db
       .select()
       .from(schema.productionReports)
@@ -293,6 +344,7 @@ productionRouter.patch('/production-reports/:id', requireRole('ADMIN'), async (c
       .reduce((acc, r) => acc + (parseFloat(r.totalLiters) || 0), 0);
 
     const newTotalCooked = otherCooked + targetLiters;
+    const newTotalAvailable = initialStock + newTotalCooked;
 
     const deliveries = await db
       .select()
@@ -301,13 +353,13 @@ productionRouter.patch('/production-reports/:id', requireRole('ADMIN'), async (c
 
     const totalDelivered = deliveries.reduce((acc, d) => acc + (parseFloat(d.totalLiters) || 0), 0);
 
-    if (newTotalCooked < totalDelivered) {
+    if (newTotalAvailable < totalDelivered) {
       return c.json(
         {
           success: false,
           error: {
             code: 'DEFICIT_NOT_ALLOWED',
-            message: `Perubahan ditolak: Total teh terkirim ke booth pada tanggal ${targetDate} sudah mencapai ${totalDelivered} Liter. Mengubah total memasak menjadi ${newTotalCooked} Liter akan menyebabkan defisit stok.`,
+            message: `Perubahan ditolak: Total teh terkirim ke booth pada tanggal ${targetDate} adalah ${totalDelivered} Liter. Mengubah total memasak menjadi ${newTotalCooked} Liter (Total stok tersedia: ${newTotalAvailable} Liter termasuk stok awal ${initialStock} Liter) akan menyebabkan defisit stok.`,
           },
         },
         400
@@ -350,8 +402,11 @@ productionRouter.delete('/production-reports/:id', requireRole('ADMIN'), async (
       return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Laporan produksi tidak ditemukan' } }, 404);
     }
 
-    // Safeguard Defisit: Pastikan penghapusan laporan masak tidak membuat total masak < total terkirim
+    // Safeguard Defisit: Pastikan penghapusan laporan masak tidak membuat total stok < total terkirim
     const targetDate = currentReport.reportDate;
+    const stockSummary = await getTeaStockSummary(targetDate);
+    const initialStock = stockSummary.initialStock;
+
     const allCookings = await db
       .select()
       .from(schema.productionReports)
@@ -361,6 +416,8 @@ productionRouter.delete('/production-reports/:id', requireRole('ADMIN'), async (
       .filter((r) => r.id !== id)
       .reduce((acc, r) => acc + (parseFloat(r.totalLiters) || 0), 0);
 
+    const remainingAvailable = initialStock + remainingCooked;
+
     const deliveries = await db
       .select()
       .from(schema.productionDeliveries)
@@ -368,13 +425,13 @@ productionRouter.delete('/production-reports/:id', requireRole('ADMIN'), async (
 
     const totalDelivered = deliveries.reduce((acc, d) => acc + (parseFloat(d.totalLiters) || 0), 0);
 
-    if (remainingCooked < totalDelivered) {
+    if (remainingAvailable < totalDelivered) {
       return c.json(
         {
           success: false,
           error: {
             code: 'DEFICIT_NOT_ALLOWED',
-            message: `Tidak dapat menghapus laporan memasak ini: Total teh terkirim ke booth pada tanggal ${targetDate} adalah ${totalDelivered} Liter. Menghapus sesi masak ini menyisakan ${remainingCooked} Liter yang akan menyebabkan defisit stok.`,
+            message: `Tidak dapat menghapus laporan memasak ini: Total teh terkirim ke booth pada tanggal ${targetDate} adalah ${totalDelivered} Liter. Menghapus sesi masak ini menyisakan ${remainingAvailable} Liter total stok tersedia (termasuk stok awal ${initialStock} Liter) yang akan menyebabkan defisit stok.`,
           },
         },
         400
