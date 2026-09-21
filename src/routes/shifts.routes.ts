@@ -4,6 +4,7 @@ import { eq, and, desc } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import * as schema from '../db/schema/index.js';
 import { AppEnv, AuthContextUser, requireRole } from '../middleware/auth.middleware.js';
+import { getWibDateString } from '../utils/date.js';
 
 const dailyReportStartSchema = z.object({
   cashModal: z.coerce.number().int().min(0, 'Modal cash tidak boleh bernilai negatif'),
@@ -67,12 +68,12 @@ export const shiftsRouter = new Hono<AppEnv>();
 shiftsRouter.get('/daily-reports/today', requireRole('BOOTH_ATTENDANT'), async (c) => {
   try {
     const user = c.get('user') as AuthContextUser;
-    const dateQuery = c.req.query('date') || new Date().toISOString().split('T')[0] || '';
+    const dateQuery = c.req.query('date') || getWibDateString();
 
     const normalizeDate = (d: unknown): string => {
       if (!d) return '';
       if (typeof d === 'string') return d.includes('T') ? (d.split('T')[0] || '') : d;
-      if (d instanceof Date) return d.toISOString().split('T')[0] || '';
+      if (d instanceof Date) return getWibDateString(d);
       return String(d).split('T')[0] || '';
     };
 
@@ -157,12 +158,12 @@ shiftsRouter.post('/daily-reports/start', requireRole('BOOTH_ATTENDANT'), async 
     }
 
     const { cashModal, stockItems, gpsLatitude, gpsLongitude, gpsAccuracy } = parseResult.data;
-    const today: string = new Date().toISOString().split('T')[0] || '';
+    const today = getWibDateString();
 
     const normalizeDate = (d: unknown): string => {
       if (!d) return '';
       if (typeof d === 'string') return d.includes('T') ? (d.split('T')[0] || '') : d;
-      if (d instanceof Date) return d.toISOString().split('T')[0] || '';
+      if (d instanceof Date) return getWibDateString(d);
       return String(d).split('T')[0] || '';
     };
 
@@ -315,12 +316,12 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
     }
 
     const { cashFinal, stockItems, saleItems, notes, gpsLatitude, gpsLongitude, gpsAccuracy } = parseResult.data;
-    const today: string = new Date().toISOString().split('T')[0] || '';
+    const today = getWibDateString();
 
     const normalizeDate = (d: unknown): string => {
       if (!d) return '';
       if (typeof d === 'string') return d.includes('T') ? (d.split('T')[0] || '') : d;
-      if (d instanceof Date) return d.toISOString().split('T')[0] || '';
+      if (d instanceof Date) return getWibDateString(d);
       return String(d).split('T')[0] || '';
     };
 

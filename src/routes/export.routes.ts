@@ -4,6 +4,7 @@ import ExcelJS from 'exceljs';
 import { db } from '../db/index.js';
 import * as schema from '../db/schema/index.js';
 import { AppEnv, requireRole } from '../middleware/auth.middleware.js';
+import { getWibDateString } from '../utils/date.js';
 
 interface StyledColumn {
   header: string;
@@ -152,7 +153,7 @@ export const exportRouter = new Hono<AppEnv>();
 exportRouter.get('/export/sales', requireRole('ADMIN'), async (c) => {
   try {
     const { from, to, boothId } = c.req.query();
-    const today = new Date().toISOString().split('T')[0];
+    const today = getWibDateString();
     const fromDate = from || '2026-09-01';
     const toDate = to || today;
 
@@ -319,7 +320,7 @@ exportRouter.get('/export/sales', requireRole('ADMIN'), async (c) => {
 exportRouter.get('/export/shift-assignments', requireRole('ADMIN'), async (c) => {
   try {
     const { date, boothId } = c.req.query();
-    const today = new Date().toISOString().split('T')[0];
+    const today = getWibDateString();
     const targetDate = date || today;
 
     let assignments: any[] = [];
@@ -454,7 +455,7 @@ exportRouter.get('/export/shift-assignments', requireRole('ADMIN'), async (c) =>
 // GET /export/production
 exportRouter.get('/export/production', requireRole('ADMIN', 'PRODUCTION'), async (c) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getWibDateString();
 
     let records: any[] = [];
     try {
@@ -566,7 +567,7 @@ exportRouter.get('/export/production', requireRole('ADMIN', 'PRODUCTION'), async
 exportRouter.get('/export/production-deliveries', requireRole('ADMIN', 'PRODUCTION'), async (c) => {
   try {
     const { from, to, boothId } = c.req.query();
-    const today = new Date().toISOString().split('T')[0];
+    const today = getWibDateString();
     const fromDate = from || '2026-09-01';
     const toDate = to || today;
 

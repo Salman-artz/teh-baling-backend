@@ -1,15 +1,16 @@
 import { Hono } from 'hono';
-import { eq, desc, and } from 'drizzle-orm';
+import { eq, desc, and, gte, lte } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import * as schema from '../db/schema/index.js';
 import { AppEnv, requireRole } from '../middleware/auth.middleware.js';
+import { getWibDateString, getWibCurrentHour } from '../utils/date.js';
 
 export const summaryRouter = new Hono<AppEnv>();
 
 // GET /dashboard/today (HANYA DARI BOOTH YANG AKTIF)
 summaryRouter.get('/dashboard/today', requireRole('ADMIN'), async (c) => {
   try {
-    const today: string = new Date().toISOString().split('T')[0]!;
+    const today = getWibDateString();
 
     // 1. Ambil hanya booth yang AKTIF
     const activeBooths = await db
@@ -17,8 +18,6 @@ summaryRouter.get('/dashboard/today', requireRole('ADMIN'), async (c) => {
       .from(schema.booths)
       .where(eq(schema.booths.isActive, true))
       .orderBy(desc(schema.booths.createdAt));
-
-    const activeBoothIds = new Set(activeBooths.map((b) => b.id));
 
     // 2. Ambil laporan shift hari ini yang terhubung ke booth aktif
     const todayReports = await db
@@ -48,11 +47,7 @@ summaryRouter.get('/dashboard/today', requireRole('ADMIN'), async (c) => {
       .leftJoin(schema.users, eq(schema.boothAssignments.userId, schema.users.id))
       .where(eq(schema.boothAssignments.assignmentDate, today));
 
-    // Determine current hour in WIB (UTC+7)
-    const now = new Date();
-    const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-    const wibDate = new Date(utc + 3600000 * 7);
-    const currentHour = wibDate.getHours();
+    const currentHour = getWibCurrentHour();
 
     let totalRevenue = 0;
     let totalCupsSold = 0;
@@ -70,7 +65,6 @@ summaryRouter.get('/dashboard/today', requireRole('ADMIN'), async (c) => {
       const cups = Math.round(revenue / 10000);
       totalCupsSold += cups;
 
-      // Ambil shift yang sebenarnya dijadwalkan di database (jika ada), atau fallback berdasarkan jam WIB
       const shiftType: 'PAGI' | 'SORE' = (assign?.shiftType as 'PAGI' | 'SORE') || (currentHour >= 16 ? 'SORE' : 'PAGI');
       const shift = shiftType === 'PAGI' ? 'Shift Pagi (09:00 - 16:00)' : 'Shift Sore (16:00 - 21:00)';
 
@@ -107,46 +101,47 @@ summaryRouter.get('/dashboard/chart', requireRole('ADMIN'), async (c) => {
   try {
     const boothId = c.req.query('boothId') || 'ALL';
     const period = c.req.query('period') || 'hourly';
-
-    const activeBooths = await db.select().from(schema.booths).where(eq(schema.booths.isActive, true));
-    const activeBoothIds = new Set(activeBooths.map((b) => b.id));
-
-    const allReports = await db
-      .select({
-        id: schema.dailyReports.id,
-        boothId: schema.dailyReports.boothId,
-        reportDate: schema.dailyReports.reportDate,
-        cashModal: schema.dailyReports.cashModal,
-        cashFinal: schema.dailyReports.cashFinal,
-        status: schema.dailyReports.status,
-      })
-      .from(schema.dailyReports)
-      .innerJoin(schema.booths, and(eq(schema.dailyReports.boothId, schema.booths.id), eq(schema.booths.isActive, true)));
+    const today = getWibDateString();
 
     if (period === 'hourly') {
       const timeSlots = ['08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00'];
-      const today: string = new Date().toISOString().split('T')[0]!;
-      const todayReports = allReports.filter((r) => r.reportDate === today);
+      
+      const todayConditions = [
+        eq(schema.booths.isActive, true),
+        eq(schema.dailyReports.reportDate, today),
+      ];
+      if (boothId !== 'ALL') {
+        todayConditions.push(eq(schema.dailyReports.boothId, boothId));
+      }
+
+      const todayReports = await db
+        .select({
+          id: schema.dailyReports.id,
+          boothId: schema.dailyReports.boothId,
+          reportDate: schema.dailyReports.reportDate,
+          cashModal: schema.dailyReports.cashModal,
+          cashFinal: schema.dailyReports.cashFinal,
+          status: schema.dailyReports.status,
+        })
+        .from(schema.dailyReports)
+        .innerJoin(schema.booths, and(eq(schema.dailyReports.boothId, schema.booths.id), eq(schema.booths.isActive, true)))
+        .where(and(...todayConditions));
+
+      let totalRevenue = 0;
+      let totalCups = 0;
+
+      todayReports.forEach((r) => {
+        const rev = Math.max(0, (r.cashFinal || 0) - (r.cashModal || 0));
+        totalRevenue += rev;
+        totalCups += Math.round(rev / 10000);
+      });
 
       const data = timeSlots.map((slot) => {
-        let totalRevenue = 0;
-        let totalCups = 0;
-
-        todayReports.forEach((r) => {
-          if (boothId !== 'ALL' && r.boothId !== boothId) return;
-          const rev = Math.max(0, (r.cashFinal || 0) - (r.cashModal || 0));
-          totalRevenue += rev;
-          totalCups += Math.round(rev / 10000);
-        });
-
-        // If specific booth
         if (boothId !== 'ALL') {
-          const boothRep = todayReports.find((r) => r.boothId === boothId);
-          const rev = boothRep ? Math.max(0, (boothRep.cashFinal || 0) - (boothRep.cashModal || 0)) : 0;
           return {
             label: slot,
-            revenue: rev > 0 ? Math.round(rev / timeSlots.length) : 0,
-            cups: rev > 0 ? Math.round(rev / (10000 * timeSlots.length)) : 0,
+            revenue: totalRevenue > 0 ? Math.round(totalRevenue / timeSlots.length) : 0,
+            cups: totalRevenue > 0 ? Math.round(totalRevenue / (10000 * timeSlots.length)) : 0,
           };
         }
 
@@ -168,18 +163,41 @@ summaryRouter.get('/dashboard/chart', requireRole('ADMIN'), async (c) => {
       for (let i = 6; i >= 0; i--) {
         const d = new Date(now);
         d.setDate(d.getDate() - i);
-        const dateStr = d.toISOString().split('T')[0]!;
+        const dateStr = getWibDateString(d);
         const dayLabel = days[d.getDay()] || 'Hari';
         last7Days.push({ label: dayLabel, dateStr });
       }
 
+      const minDate = last7Days[0]?.dateStr || today;
+      const maxDate = last7Days[last7Days.length - 1]?.dateStr || today;
+
+      const conditions = [
+        eq(schema.booths.isActive, true),
+        gte(schema.dailyReports.reportDate, minDate),
+        lte(schema.dailyReports.reportDate, maxDate),
+      ];
+      if (boothId !== 'ALL') {
+        conditions.push(eq(schema.dailyReports.boothId, boothId));
+      }
+
+      const reports = await db
+        .select({
+          id: schema.dailyReports.id,
+          boothId: schema.dailyReports.boothId,
+          reportDate: schema.dailyReports.reportDate,
+          cashModal: schema.dailyReports.cashModal,
+          cashFinal: schema.dailyReports.cashFinal,
+        })
+        .from(schema.dailyReports)
+        .innerJoin(schema.booths, and(eq(schema.dailyReports.boothId, schema.booths.id), eq(schema.booths.isActive, true)))
+        .where(and(...conditions));
+
       const data = last7Days.map(({ label, dateStr }) => {
-        const dayReports = allReports.filter((r) => r.reportDate === dateStr);
+        const dayReports = reports.filter((r) => r.reportDate === dateStr);
         let revenue = 0;
         let cups = 0;
 
         dayReports.forEach((r) => {
-          if (boothId !== 'ALL' && r.boothId !== boothId) return;
           const rev = Math.max(0, (r.cashFinal || 0) - (r.cashModal || 0));
           revenue += rev;
           cups += Math.round(rev / 10000);
@@ -199,31 +217,53 @@ summaryRouter.get('/dashboard/chart', requireRole('ADMIN'), async (c) => {
       return c.json({ success: true, period, boothId, data });
     }
 
-    // monthly
+    // monthly (Last 30 days grouped into 4 weeks)
     const weeks = ['Minggu 1', 'Minggu 2', 'Minggu 3', 'Minggu 4'];
+    const startOfMonth = today.slice(0, 7) + '-01';
+
+    const conditions = [
+      eq(schema.booths.isActive, true),
+      gte(schema.dailyReports.reportDate, startOfMonth),
+      lte(schema.dailyReports.reportDate, today),
+    ];
+    if (boothId !== 'ALL') {
+      conditions.push(eq(schema.dailyReports.boothId, boothId));
+    }
+
+    const monthReports = await db
+      .select({
+        id: schema.dailyReports.id,
+        boothId: schema.dailyReports.boothId,
+        reportDate: schema.dailyReports.reportDate,
+        cashModal: schema.dailyReports.cashModal,
+        cashFinal: schema.dailyReports.cashFinal,
+      })
+      .from(schema.dailyReports)
+      .innerJoin(schema.booths, and(eq(schema.dailyReports.boothId, schema.booths.id), eq(schema.booths.isActive, true)))
+      .where(and(...conditions));
+
+    let monthRevenue = 0;
+    let monthCups = 0;
+
+    monthReports.forEach((r) => {
+      const rev = Math.max(0, (r.cashFinal || 0) - (r.cashModal || 0));
+      monthRevenue += rev;
+      monthCups += Math.round(rev / 10000);
+    });
+
     const data = weeks.map((label) => {
-      let revenue = 0;
-      let cups = 0;
-
-      allReports.forEach((r) => {
-        if (boothId !== 'ALL' && r.boothId !== boothId) return;
-        const rev = Math.max(0, (r.cashFinal || 0) - (r.cashModal || 0));
-        revenue += rev;
-        cups += Math.round(rev / 10000);
-      });
-
       if (boothId !== 'ALL') {
         return {
           label,
-          revenue: revenue > 0 ? Math.round(revenue / 4) : 0,
-          cups: cups > 0 ? Math.round(cups / 4) : 0,
+          revenue: monthRevenue > 0 ? Math.round(monthRevenue / 4) : 0,
+          cups: monthCups > 0 ? Math.round(monthCups / 4) : 0,
         };
       }
 
       return {
         label,
-        totalRevenue: revenue > 0 ? Math.round(revenue / 4) : 0,
-        cups: cups > 0 ? Math.round(cups / 4) : 0,
+        totalRevenue: monthRevenue > 0 ? Math.round(monthRevenue / 4) : 0,
+        cups: monthCups > 0 ? Math.round(monthCups / 4) : 0,
       };
     });
 
@@ -241,6 +281,11 @@ summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN'), async (c) =>
     const toDate = c.req.query('to');
     const boothId = c.req.query('boothId');
 
+    const conditions = [eq(schema.booths.isActive, true)];
+    if (fromDate) conditions.push(gte(schema.dailyReports.reportDate, fromDate));
+    if (toDate) conditions.push(lte(schema.dailyReports.reportDate, toDate));
+    if (boothId && boothId !== 'ALL') conditions.push(eq(schema.dailyReports.boothId, boothId));
+
     const dbReports = await db
       .select({
         id: schema.dailyReports.id,
@@ -253,20 +298,10 @@ summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN'), async (c) =>
       })
       .from(schema.dailyReports)
       .innerJoin(schema.booths, and(eq(schema.dailyReports.boothId, schema.booths.id), eq(schema.booths.isActive, true)))
+      .where(and(...conditions))
       .orderBy(desc(schema.dailyReports.reportDate), desc(schema.dailyReports.createdAt));
 
-    let filtered = dbReports;
-    if (fromDate) {
-      filtered = filtered.filter((r) => r.date >= fromDate);
-    }
-    if (toDate) {
-      filtered = filtered.filter((r) => r.date <= toDate);
-    }
-    if (boothId && boothId !== 'ALL') {
-      filtered = filtered.filter((r) => r.boothId === boothId);
-    }
-
-    const formatted = filtered.map((r) => {
+    const formatted = dbReports.map((r) => {
       const modal = r.cashModal || 0;
       const finalCash = r.cashFinal !== null ? r.cashFinal : modal;
       const revenue = Math.max(0, finalCash - modal);
@@ -293,7 +328,7 @@ summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN'), async (c) =>
 summaryRouter.get('/dashboard/booth-comparison', requireRole('ADMIN'), async (c) => {
   try {
     const range = c.req.query('range') || 'today';
-    const today: string = new Date().toISOString().split('T')[0]!;
+    const today = getWibDateString();
 
     const allBooths = await db
       .select()
@@ -301,9 +336,20 @@ summaryRouter.get('/dashboard/booth-comparison', requireRole('ADMIN'), async (c)
       .where(eq(schema.booths.isActive, true))
       .orderBy(desc(schema.booths.createdAt));
 
-    const activeBoothIds = new Set(allBooths.map((b) => b.id));
+    const conditions = [eq(schema.booths.isActive, true)];
 
-    let allReports = await db
+    if (range === 'today') {
+      conditions.push(eq(schema.dailyReports.reportDate, today));
+    } else if (range === '7days') {
+      const d = new Date();
+      d.setDate(d.getDate() - 7);
+      conditions.push(gte(schema.dailyReports.reportDate, getWibDateString(d)));
+    } else if (range === 'month') {
+      const startOfMonth = today.slice(0, 7) + '-01';
+      conditions.push(gte(schema.dailyReports.reportDate, startOfMonth));
+    }
+
+    const allReports = await db
       .select({
         id: schema.dailyReports.id,
         boothId: schema.dailyReports.boothId,
@@ -313,19 +359,8 @@ summaryRouter.get('/dashboard/booth-comparison', requireRole('ADMIN'), async (c)
         status: schema.dailyReports.status,
       })
       .from(schema.dailyReports)
-      .innerJoin(schema.booths, and(eq(schema.dailyReports.boothId, schema.booths.id), eq(schema.booths.isActive, true)));
-
-    if (range === 'today') {
-      allReports = allReports.filter((r) => r.reportDate === today);
-    } else if (range === '7days') {
-      const d = new Date();
-      d.setDate(d.getDate() - 7);
-      const minDate = d.toISOString().split('T')[0]!;
-      allReports = allReports.filter((r) => r.reportDate >= minDate);
-    } else if (range === 'month') {
-      const startOfMonth = today.slice(0, 7) + '-01';
-      allReports = allReports.filter((r) => r.reportDate >= startOfMonth);
-    }
+      .innerJoin(schema.booths, and(eq(schema.dailyReports.boothId, schema.booths.id), eq(schema.booths.isActive, true)))
+      .where(and(...conditions));
 
     const comparisonData = allBooths.map((booth) => {
       const boothReports = allReports.filter((r) => r.boothId === booth.id);
