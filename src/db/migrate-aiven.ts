@@ -182,8 +182,7 @@ async function migrateAndSeed() {
         total_liters NUMERIC(8, 2) NOT NULL CHECK (total_liters > 0),
         notes TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        CONSTRAINT uk_staff_production_date UNIQUE (staff_id, report_date)
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `;
 
