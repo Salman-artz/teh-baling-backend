@@ -841,12 +841,42 @@ masterRouter.delete('/users/:id', requireRole('ADMIN'), async (c) => {
       return c.json({ success: false, error: { code: 'FORBIDDEN', message: 'Anda tidak dapat menghapus akun sendiri' } }, 400);
     }
 
-    try {
-      await db.delete(schema.users).where(eq(schema.users.id, userId));
-    } catch {
-      await db.update(schema.users).set({ isActive: false, updatedAt: new Date() }).where(eq(schema.users.id, userId));
+    const targetUser = await db.query.users.findFirst({
+      where: eq(schema.users.id, userId),
+    });
+    if (!targetUser) {
+      return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Pengguna tidak ditemukan' } }, 404);
     }
-    return c.json({ success: true, message: 'Pengguna berhasil dihapus' });
+
+    // 1. Delete associated daily reports and their items
+    const userReports = await db
+      .select({ id: schema.dailyReports.id })
+      .from(schema.dailyReports)
+      .where(eq(schema.dailyReports.attendantId, userId));
+
+    for (const r of userReports) {
+      await db.delete(schema.reportSaleItems).where(eq(schema.reportSaleItems.dailyReportId, r.id));
+      await db.delete(schema.reportStockItems).where(eq(schema.reportStockItems.dailyReportId, r.id));
+    }
+    if (userReports.length > 0) {
+      await db.delete(schema.dailyReports).where(eq(schema.dailyReports.attendantId, userId));
+    }
+
+    // 2. Delete booth assignments
+    await db.delete(schema.boothAssignments).where(eq(schema.boothAssignments.userId, userId));
+    await db
+      .update(schema.boothAssignments)
+      .set({ createdBy: null })
+      .where(eq(schema.boothAssignments.createdBy, userId));
+
+    // 3. Delete production reports & deliveries
+    await db.delete(schema.productionReports).where(eq(schema.productionReports.staffId, userId));
+    await db.delete(schema.productionDeliveries).where(eq(schema.productionDeliveries.staffId, userId));
+
+    // 4. Delete the user permanently
+    await db.delete(schema.users).where(eq(schema.users.id, userId));
+
+    return c.json({ success: true, message: `Akun "${targetUser.name}" berhasil dihapus permanen.` });
   } catch (err) {
     console.error('[Delete User Error]:', err);
     return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal menghapus pengguna' } }, 500);
