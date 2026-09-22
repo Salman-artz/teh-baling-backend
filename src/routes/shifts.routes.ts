@@ -28,6 +28,7 @@ const dailyReportEndSchema = z.object({
       z.object({
         cupTypeId: z.string(),
         qtyInitial: z.coerce.number().int().min(0).optional(),
+        qtyAdded: z.coerce.number().int().min(0).optional(),
         qtyFinal: z.coerce.number().int().min(0).optional(),
         qtySold: z.coerce.number().int().min(0).optional(),
       })
@@ -47,6 +48,12 @@ const dailyReportEndSchema = z.object({
   gpsLatitude: z.coerce.number().nullable().optional(),
   gpsLongitude: z.coerce.number().nullable().optional(),
   gpsAccuracy: z.coerce.number().nullable().optional(),
+});
+
+const restockCupsSchema = z.object({
+  cupTypeId: z.string().uuid('ID cup type wajib valid'),
+  qtyAdded: z.coerce.number().int().positive('Jumlah penambahan cup wajib lebih dari 0'),
+  notes: z.string().trim().optional().nullable(),
 });
 
 function calculateDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -123,6 +130,7 @@ shiftsRouter.get('/daily-reports/today', requireRole('BOOTH_ATTENDANT'), async (
         stockItems: stockItems.map((s) => ({
           cupTypeId: s.cupTypeId,
           qtyInitial: s.qtyInitial,
+          qtyAdded: s.qtyAdded || 0,
           qtySold: s.qtySold,
           priceSnapshot: s.priceSnapshot,
         })),
@@ -298,6 +306,101 @@ shiftsRouter.post('/daily-reports/start', requireRole('BOOTH_ATTENDANT'), async 
   }
 });
 
+// POST /daily-reports/restock-cups (Tambah Stok Cup di Tengah Penjualan)
+shiftsRouter.post('/daily-reports/restock-cups', requireRole('BOOTH_ATTENDANT'), async (c) => {
+  try {
+    const user = c.get('user') as AuthContextUser;
+    const rawBody = await c.req.json();
+    const parseResult = restockCupsSchema.safeParse(rawBody);
+
+    if (!parseResult.success) {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: parseResult.error.errors.map((e) => e.message).join(', '),
+          },
+        },
+        400
+      );
+    }
+
+    const { cupTypeId, qtyAdded } = parseResult.data;
+    const today = getWibDateString();
+
+    const report = await db.query.dailyReports.findFirst({
+      where: and(
+        eq(schema.dailyReports.attendantId, user.id),
+        eq(schema.dailyReports.reportDate, today)
+      ),
+    });
+
+    if (!report) {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'NO_ACTIVE_SHIFT',
+            message: 'Akses Ditolak: Anda belum memulai shift hari ini. Silakan mulai shift terlebih dahulu sebelum menambah cup.',
+          },
+        },
+        400
+      );
+    }
+
+    if (report.status === 'CLOSED') {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'SHIFT_ALREADY_CLOSED',
+            message: 'Akses Ditolak: Shift hari ini telah ditutup (closing). Penambahan cup tidak dapat dilakukan.',
+          },
+        },
+        400
+      );
+    }
+
+    // Periksa apakah item stok cup sudah ada di reportStockItems
+    const existingStock = await db.query.reportStockItems.findFirst({
+      where: and(
+        eq(schema.reportStockItems.dailyReportId, report.id),
+        eq(schema.reportStockItems.cupTypeId, cupTypeId)
+      ),
+    });
+
+    if (existingStock) {
+      const updatedQtyAdded = (existingStock.qtyAdded || 0) + qtyAdded;
+      await db
+        .update(schema.reportStockItems)
+        .set({ qtyAdded: updatedQtyAdded })
+        .where(eq(schema.reportStockItems.id, existingStock.id));
+    } else {
+      const cup = await db.query.cupTypes.findFirst({
+        where: eq(schema.cupTypes.id, cupTypeId),
+      });
+
+      await db.insert(schema.reportStockItems).values({
+        dailyReportId: report.id,
+        cupTypeId,
+        qtyInitial: 0,
+        qtyAdded,
+        qtySold: 0,
+        priceSnapshot: cup?.price || 0,
+      });
+    }
+
+    return c.json({
+      success: true,
+      message: `Berhasil menambahkan ${qtyAdded} pcs stok cup ke shift aktif.`,
+    });
+  } catch (err) {
+    console.error('[Restock Cups Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal menambahkan stok cup' } }, 500);
+  }
+});
+
 // POST /daily-reports/end
 shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c) => {
   try {
@@ -468,12 +571,15 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
           .map((item) => {
             const priceSnapshot = cupPriceMap.get(item.cupTypeId) || 0;
             const initial = item.qtyInitial ?? 0;
+            const added = item.qtyAdded ?? 0;
             const final = item.qtyFinal ?? 0;
-            const sold = item.qtySold !== undefined ? item.qtySold : Math.max(0, initial - final);
+            const totalAvailable = initial + added;
+            const sold = item.qtySold !== undefined ? item.qtySold : Math.max(0, totalAvailable - final);
             return {
               dailyReportId: finalReport.id,
               cupTypeId: item.cupTypeId,
               qtyInitial: initial,
+              qtyAdded: added,
               qtySold: sold,
               priceSnapshot,
             };
