@@ -391,7 +391,7 @@ exportRouter.get('/export/shift-assignments', requireRole('ADMIN'), async (c) =>
     const rows = assignments.map((item, index) => {
       const shiftDate = item.assignmentDate;
       const isPagi = index % 2 === 0;
-      const shiftName = isPagi ? 'Shift Pagi (09:00 - 16:00 WIB)' : 'Shift Sore (16:00 - 21:00 WIB)';
+      const shiftName = isPagi ? 'Shift Pagi (09:00 - 15:00 WIB)' : 'Shift Sore (15:00 - 20:30 WIB)';
       
       let statusStr = 'Sedang Beroperasi';
       if (shiftDate < todayStr) {
@@ -401,11 +401,11 @@ exportRouter.get('/export/shift-assignments', requireRole('ADMIN'), async (c) =>
       } else {
         if (isPagi) {
           if (currentTimeDec < 9.0) statusStr = 'Belum Mulai';
-          else if (currentTimeDec >= 16.0) statusStr = 'Selesai (Shift Pagi Berakhir)';
+          else if (currentTimeDec >= 15.0) statusStr = 'Selesai (Shift Pagi Berakhir)';
           else statusStr = 'Sedang Beroperasi (Shift Pagi)';
         } else {
-          if (currentTimeDec < 16.0) statusStr = 'Belum Mulai';
-          else if (currentTimeDec >= 21.0) statusStr = 'Selesai (Shift Sore Berakhir)';
+          if (currentTimeDec < 15.0) statusStr = 'Belum Mulai';
+          else if (currentTimeDec >= 20.5) statusStr = 'Selesai (Shift Sore Berakhir)';
           else statusStr = 'Sedang Beroperasi (Shift Sore)';
         }
       }

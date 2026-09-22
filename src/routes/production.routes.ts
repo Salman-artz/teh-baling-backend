@@ -73,8 +73,8 @@ function isProductionOperatingHours(): boolean {
   const minute = parseInt(parts.find((p) => p.type === 'minute')?.value || '0', 10);
   const totalMinutes = hour * 60 + minute;
 
-  // 05:00 WIB (300 mins) to 21:00 WIB (1260 mins)
-  return totalMinutes >= 5 * 60 && totalMinutes <= 21 * 60;
+  // 05:00 WIB (300 mins) to 23:00 WIB (1380 mins)
+  return totalMinutes >= 5 * 60 && totalMinutes <= 23 * 60;
 }
 
 function getPreviousWibDate(dateStr: string): string {
@@ -182,14 +182,14 @@ productionRouter.post('/production-reports', requireRole('ADMIN', 'PRODUCTION'),
   try {
     const user = c.get('user') as AuthContextUser;
 
-    // Staf produksi dibatasi jam operasional 05:00-21:00, Admin memiliki akses bypass kapan saja
+    // Staf produksi dibatasi jam operasional 05:00-23:00, Admin memiliki akses bypass kapan saja
     if (user.role === 'PRODUCTION' && !isProductionOperatingHours()) {
       return c.json(
         {
           success: false,
           error: {
             code: 'OUTSIDE_OPERATING_HOURS',
-            message: 'Akses Ditolak: Penginputan laporan memasak teh hanya dapat dilakukan pada jam operasional 05:00 - 21:00 WIB',
+            message: 'Akses Ditolak: Penginputan laporan memasak teh hanya dapat dilakukan pada jam operasional 05:00 - 23:00 WIB',
           },
         },
         403
@@ -459,14 +459,14 @@ productionRouter.post('/production-deliveries', requireRole('ADMIN', 'PRODUCTION
   try {
     const user = c.get('user') as AuthContextUser;
 
-    // Staf produksi dibatasi jam operasional 05:00-21:00, Admin memiliki akses bypass kapan saja
+    // Staf produksi dibatasi jam operasional 05:00-23:00, Admin memiliki akses bypass kapan saja
     if (user.role === 'PRODUCTION' && !isProductionOperatingHours()) {
       return c.json(
         {
           success: false,
           error: {
             code: 'OUTSIDE_OPERATING_HOURS',
-            message: 'Akses Ditolak: Penginputan pengiriman teh hanya dapat dilakukan pada jam operasional 05:00 - 21:00 WIB',
+            message: 'Akses Ditolak: Penginputan pengiriman teh hanya dapat dilakukan pada jam operasional 05:00 - 23:00 WIB',
           },
         },
         403

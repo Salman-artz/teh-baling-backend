@@ -65,8 +65,8 @@ summaryRouter.get('/dashboard/today', requireRole('ADMIN'), async (c) => {
       const cups = Math.round(revenue / 10000);
       totalCupsSold += cups;
 
-      const shiftType: 'PAGI' | 'SORE' = (assign?.shiftType as 'PAGI' | 'SORE') || (currentHour >= 16 ? 'SORE' : 'PAGI');
-      const shift = shiftType === 'PAGI' ? 'Shift Pagi (09:00 - 16:00)' : 'Shift Sore (16:00 - 21:00)';
+      const shiftType: 'PAGI' | 'SORE' = (assign?.shiftType as 'PAGI' | 'SORE') || (currentHour >= 15 ? 'SORE' : 'PAGI');
+      const shift = shiftType === 'PAGI' ? 'Shift Pagi (09:00 - 15:00)' : 'Shift Sore (15:00 - 20:30)';
 
       return {
         id: b.id,
