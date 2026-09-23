@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { eq, desc, and } from 'drizzle-orm';
+import { eq, desc, and, gte, lte, inArray } from 'drizzle-orm';
 import ExcelJS from 'exceljs';
 import { db } from '../db/index.js';
 import * as schema from '../db/schema/index.js';
@@ -154,8 +154,13 @@ exportRouter.get('/export/sales', requireRole('ADMIN'), async (c) => {
   try {
     const { from, to, boothId } = c.req.query();
     const today = getWibDateString();
-    const fromDate = from || '2026-09-01';
+    const fromDate = from || today;
     const toDate = to || today;
+
+    const conditions = [eq(schema.booths.isActive, true)];
+    if (from) conditions.push(gte(schema.dailyReports.reportDate, from));
+    if (to) conditions.push(lte(schema.dailyReports.reportDate, to));
+    if (boothId && boothId !== 'ALL') conditions.push(eq(schema.dailyReports.boothId, boothId));
 
     let reports: any[] = [];
     try {
@@ -163,6 +168,7 @@ exportRouter.get('/export/sales', requireRole('ADMIN'), async (c) => {
         .select({
           id: schema.dailyReports.id,
           reportDate: schema.dailyReports.reportDate,
+          shiftType: schema.dailyReports.shiftType,
           boothId: schema.dailyReports.boothId,
           boothName: schema.booths.name,
           boothAddress: schema.booths.address,
@@ -174,70 +180,65 @@ exportRouter.get('/export/sales', requireRole('ADMIN'), async (c) => {
         .from(schema.dailyReports)
         .innerJoin(schema.booths, and(eq(schema.dailyReports.boothId, schema.booths.id), eq(schema.booths.isActive, true)))
         .leftJoin(schema.users, eq(schema.dailyReports.attendantId, schema.users.id))
-        .orderBy(desc(schema.dailyReports.reportDate));
+        .where(and(...conditions))
+        .orderBy(desc(schema.dailyReports.reportDate), desc(schema.dailyReports.createdAt));
+
+      const reportIds = rows.map((r) => r.id);
+
+      let saleItemsList: any[] = [];
+      let stockItemsList: any[] = [];
+
+      if (reportIds.length > 0) {
+        saleItemsList = await db
+          .select({
+            dailyReportId: schema.reportSaleItems.dailyReportId,
+            qtySold: schema.reportSaleItems.qtySold,
+            priceSnapshot: schema.reportSaleItems.priceSnapshot,
+          })
+          .from(schema.reportSaleItems)
+          .where(inArray(schema.reportSaleItems.dailyReportId, reportIds));
+
+        stockItemsList = await db
+          .select({
+            dailyReportId: schema.reportStockItems.dailyReportId,
+            qtySold: schema.reportStockItems.qtySold,
+          })
+          .from(schema.reportStockItems)
+          .where(inArray(schema.reportStockItems.dailyReportId, reportIds));
+      }
 
       reports = rows.map((r) => {
         const modal = Number(r.cashModal || 0);
-        const final = Number(r.cashFinal || modal);
-        const revenue = Math.max(0, final - modal);
-        const cupsSold = Math.round(revenue / 10000);
+        const final = r.cashFinal !== null ? Number(r.cashFinal) : null;
+        
+        const sales = saleItemsList.filter((s) => s.dailyReportId === r.id);
+        const stocks = stockItemsList.filter((st) => st.dailyReportId === r.id);
+
+        const calculatedRevenue = sales.reduce((acc, s) => acc + (s.qtySold * s.priceSnapshot), 0);
+        const revenue = calculatedRevenue > 0
+          ? calculatedRevenue
+          : (final !== null ? Math.max(0, final - modal) : 0);
+
+        let cupsSold = sales.reduce((acc, s) => acc + s.qtySold, 0);
+        if (cupsSold === 0 && stocks.length > 0) {
+          cupsSold = stocks.reduce((acc, st) => acc + (st.qtySold || 0), 0);
+        }
+        if (cupsSold === 0 && revenue > 0) {
+          cupsSold = Math.round(revenue / 10000);
+        }
+
+        const expectedCash = modal + revenue;
+        const cashVariance = final !== null ? final - expectedCash : 0;
+
         return {
           ...r,
           revenue,
           cupsSold,
-          cashVariance: 0,
+          cashVariance,
         };
       });
     } catch (dbErr) {
       console.warn('[DB Export Sales]:', dbErr);
-    }
-
-    if (!reports || reports.length === 0) {
-      reports = [
-        {
-          id: 'r1',
-          reportDate: toDate,
-          boothName: 'Booth Alun-Alun Kota',
-          boothAddress: 'Jl. Pemuda No. 1, Surabaya',
-          attendantName: 'Rina Attendant',
-          cashModal: 50000,
-          cashFinal: 1900000,
-          revenue: 1850000,
-          cupsSold: 170,
-          cashVariance: 0,
-          status: 'CLOSED',
-        },
-        {
-          id: 'r2',
-          reportDate: toDate,
-          boothName: 'Booth Kampus UNESA',
-          boothAddress: 'Jl. Lidah Wetan, Surabaya',
-          attendantName: 'Siti Attendant',
-          cashModal: 50000,
-          cashFinal: 1650000,
-          revenue: 1600000,
-          cupsSold: 150,
-          cashVariance: -5000,
-          status: 'CLOSED',
-        },
-        {
-          id: 'r3',
-          reportDate: fromDate,
-          boothName: 'Booth Stasiun Gubeng',
-          boothAddress: 'Jl. Gubeng Pojok No. 1, Surabaya',
-          attendantName: 'Rina Attendant',
-          cashModal: 50000,
-          cashFinal: 1450000,
-          revenue: 1400000,
-          cupsSold: 130,
-          cashVariance: 0,
-          status: 'CLOSED',
-        },
-      ];
-    }
-
-    if (boothId && boothId !== 'ALL') {
-      reports = reports.filter((r) => r.boothId === boothId);
     }
 
     let totModal = 0;

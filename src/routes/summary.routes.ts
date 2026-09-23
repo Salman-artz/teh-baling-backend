@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { eq, desc, and, gte, lte } from 'drizzle-orm';
+import { eq, desc, and, gte, lte, inArray } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import * as schema from '../db/schema/index.js';
 import { AppEnv, requireRole } from '../middleware/auth.middleware.js';
@@ -274,7 +274,7 @@ summaryRouter.get('/dashboard/chart', requireRole('ADMIN'), async (c) => {
   }
 });
 
-// GET /dashboard/summary-table (HANYA DARI BOOTH YANG AKTIF)
+// GET /dashboard/summary-table (HANYA DARI BOOTH YANG AKTIF DENGAN DETAIL RINCIAN CUP & MENU)
 summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN'), async (c) => {
   try {
     const fromDate = c.req.query('from');
@@ -290,34 +290,183 @@ summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN'), async (c) =>
       .select({
         id: schema.dailyReports.id,
         date: schema.dailyReports.reportDate,
+        shiftType: schema.dailyReports.shiftType,
         boothId: schema.dailyReports.boothId,
         boothName: schema.booths.name,
+        boothAddress: schema.booths.address,
+        attendantId: schema.dailyReports.attendantId,
+        attendantName: schema.users.name,
         cashModal: schema.dailyReports.cashModal,
         cashFinal: schema.dailyReports.cashFinal,
+        teaRemainingLiters: schema.dailyReports.teaRemainingLiters,
+        notes: schema.dailyReports.notes,
         status: schema.dailyReports.status,
+        createdAt: schema.dailyReports.createdAt,
       })
       .from(schema.dailyReports)
       .innerJoin(schema.booths, and(eq(schema.dailyReports.boothId, schema.booths.id), eq(schema.booths.isActive, true)))
+      .leftJoin(schema.users, eq(schema.dailyReports.attendantId, schema.users.id))
       .where(and(...conditions))
       .orderBy(desc(schema.dailyReports.reportDate), desc(schema.dailyReports.createdAt));
 
+    const reportIds = dbReports.map((r) => r.id);
+
+    let saleItemsList: any[] = [];
+    let stockItemsList: any[] = [];
+
+    if (reportIds.length > 0) {
+      saleItemsList = await db
+        .select({
+          id: schema.reportSaleItems.id,
+          dailyReportId: schema.reportSaleItems.dailyReportId,
+          productId: schema.reportSaleItems.productId,
+          productName: schema.teaProducts.name,
+          cupTypeId: schema.reportSaleItems.cupTypeId,
+          cupTypeName: schema.cupTypes.name,
+          qtySold: schema.reportSaleItems.qtySold,
+          priceSnapshot: schema.reportSaleItems.priceSnapshot,
+        })
+        .from(schema.reportSaleItems)
+        .leftJoin(schema.teaProducts, eq(schema.reportSaleItems.productId, schema.teaProducts.id))
+        .leftJoin(schema.cupTypes, eq(schema.reportSaleItems.cupTypeId, schema.cupTypes.id))
+        .where(inArray(schema.reportSaleItems.dailyReportId, reportIds));
+
+      stockItemsList = await db
+        .select({
+          id: schema.reportStockItems.id,
+          dailyReportId: schema.reportStockItems.dailyReportId,
+          cupTypeId: schema.reportStockItems.cupTypeId,
+          cupTypeName: schema.cupTypes.name,
+          qtyInitial: schema.reportStockItems.qtyInitial,
+          qtyAdded: schema.reportStockItems.qtyAdded,
+          qtySold: schema.reportStockItems.qtySold,
+          priceSnapshot: schema.reportStockItems.priceSnapshot,
+        })
+        .from(schema.reportStockItems)
+        .leftJoin(schema.cupTypes, eq(schema.reportStockItems.cupTypeId, schema.cupTypes.id))
+        .where(inArray(schema.reportStockItems.dailyReportId, reportIds));
+    }
+
     const formatted = dbReports.map((r) => {
       const modal = r.cashModal || 0;
-      const finalCash = r.cashFinal !== null ? r.cashFinal : modal;
-      const revenue = Math.max(0, finalCash - modal);
-      const cups = Math.round(revenue / 10000);
+      const finalCash = r.cashFinal !== null ? r.cashFinal : null;
+      
+      const sales = saleItemsList.filter((s) => s.dailyReportId === r.id);
+      const stocks = stockItemsList.filter((st) => st.dailyReportId === r.id);
+
+      const calculatedRevenue = sales.reduce((acc, s) => acc + (s.qtySold * s.priceSnapshot), 0);
+      const revenue = calculatedRevenue > 0 
+        ? calculatedRevenue 
+        : (finalCash !== null ? Math.max(0, finalCash - modal) : 0);
+
+      // Hitung total cup terjual dari sale items atau stock items
+      let cupsSold = sales.reduce((acc, s) => acc + s.qtySold, 0);
+      if (cupsSold === 0 && stocks.length > 0) {
+        cupsSold = stocks.reduce((acc, st) => acc + (st.qtySold || 0), 0);
+      }
+      if (cupsSold === 0 && revenue > 0) {
+        cupsSold = Math.round(revenue / 10000);
+      }
+
+      // Hitung rincian cup terjual per jenis cup
+      const cupBreakdownMap: Record<string, number> = {};
+      sales.forEach((s) => {
+        const name = s.cupTypeName || 'Cup';
+        cupBreakdownMap[name] = (cupBreakdownMap[name] || 0) + s.qtySold;
+      });
+      if (Object.keys(cupBreakdownMap).length === 0 && stocks.length > 0) {
+        stocks.forEach((st) => {
+          const name = st.cupTypeName || 'Cup';
+          cupBreakdownMap[name] = (cupBreakdownMap[name] || 0) + (st.qtySold || 0);
+        });
+      }
+
+      const cupBreakdown = Object.entries(cupBreakdownMap).map(([cupName, qty]) => ({
+        cupTypeName: cupName,
+        qtySold: qty,
+      }));
+
+      const expectedTotalCash = modal + revenue;
+      const variance = finalCash !== null ? finalCash - expectedTotalCash : 0;
+
       return {
         id: r.id,
         date: r.date,
+        shiftType: r.shiftType || 'PAGI',
+        boothId: r.boothId,
         boothName: r.boothName || 'Booth',
+        boothAddress: r.boothAddress || '-',
+        attendantName: r.attendantName || 'Staf Booth',
+        cashModal: modal,
+        cashFinal: finalCash,
         revenue,
-        cupsSold: cups,
-        variance: 0,
+        cupsSold,
+        cupBreakdown,
+        expectedTotalCash,
+        variance,
+        teaRemainingLiters: r.teaRemainingLiters ? parseFloat(r.teaRemainingLiters) : 0,
+        notes: r.notes || '',
         status: r.status,
+        saleItems: sales.map((s) => ({
+          id: s.id,
+          productName: s.productName || 'Produk Teh',
+          cupTypeName: s.cupTypeName || 'Reguler',
+          qtySold: s.qtySold,
+          priceSnapshot: s.priceSnapshot,
+          subtotal: s.qtySold * s.priceSnapshot,
+        })),
+        stockItems: stocks.map((st) => ({
+          id: st.id,
+          cupTypeName: st.cupTypeName || 'Cup',
+          qtyInitial: st.qtyInitial,
+          qtyAdded: st.qtyAdded || 0,
+          qtyFinal: Math.max(0, (st.qtyInitial + (st.qtyAdded || 0)) - st.qtySold),
+          qtySold: st.qtySold,
+        })),
       };
     });
 
-    return c.json({ success: true, data: formatted });
+    // Hitung ringkasan per booth (Booth-Level Breakdown)
+    const boothSummaryMap: Record<string, {
+      boothId: string;
+      boothName: string;
+      boothAddress: string;
+      totalRevenue: number;
+      totalCupsSold: number;
+      cupBreakdown: Record<string, number>;
+      reportCount: number;
+    }> = {};
+
+    formatted.forEach((item) => {
+      let bSummary = boothSummaryMap[item.boothId];
+      if (!bSummary) {
+        bSummary = {
+          boothId: item.boothId,
+          boothName: item.boothName,
+          boothAddress: item.boothAddress,
+          totalRevenue: 0,
+          totalCupsSold: 0,
+          cupBreakdown: {},
+          reportCount: 0,
+        };
+        boothSummaryMap[item.boothId] = bSummary;
+      }
+      bSummary.totalRevenue += item.revenue;
+      bSummary.totalCupsSold += item.cupsSold;
+      bSummary.reportCount += 1;
+
+      item.cupBreakdown.forEach((cb) => {
+        bSummary.cupBreakdown[cb.cupTypeName] = (bSummary.cupBreakdown[cb.cupTypeName] || 0) + cb.qtySold;
+      });
+    });
+
+    const boothSummaries = Object.values(boothSummaryMap);
+
+    return c.json({
+      success: true,
+      data: formatted,
+      boothSummaries,
+    });
   } catch (err) {
     console.error('[Summary Table Error]:', err);
     return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal memuat rekap penjualan' } }, 500);
