@@ -290,6 +290,7 @@ shiftsRouter.post('/daily-reports/start', requireRole('BOOTH_ATTENDANT'), async 
           dailyReportId: report.id,
           cupTypeId: item.cupTypeId,
           qtyInitial: item.qtyInitial || 0,
+          qtyAdded: 0,
           qtySold: 0,
           priceSnapshot: cupPriceMap.get(item.cupTypeId) || 0,
         }));
@@ -300,9 +301,10 @@ shiftsRouter.post('/daily-reports/start', requireRole('BOOTH_ATTENDANT'), async 
     }
 
     return c.json({ success: true, data: report });
-  } catch (err) {
+  } catch (err: unknown) {
+    const errorDetail = err instanceof Error ? err.message : String(err);
     console.error('[Start Shift Error]:', err);
-    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal memulai laporan shift' } }, 500);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: `Gagal memulai laporan shift: ${errorDetail}` } }, 500);
   }
 });
 
