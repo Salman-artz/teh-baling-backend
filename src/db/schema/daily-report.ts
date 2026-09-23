@@ -24,7 +24,7 @@ export const dailyReports = pgTable('daily_reports', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
-  ukBoothReportDate: unique('uk_booth_report_date').on(table.boothId, table.reportDate),
+  ukBoothReportDateShift: unique('uk_booth_report_date_shift').on(table.boothId, table.reportDate, table.shiftType),
   idxDailyReportDate: index('idx_daily_reports_date').on(table.reportDate),
   idxDailyReportBooth: index('idx_daily_reports_booth').on(table.boothId),
   idxDailyReportAttendant: index('idx_daily_reports_attendant').on(table.attendantId),

@@ -10,8 +10,8 @@ export const boothAssignments = pgTable('booth_assignments', {
   createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
-  ukBoothDate: unique('uk_booth_date').on(table.boothId, table.assignmentDate),
-  ukUserDate: unique('uk_user_date').on(table.userId, table.assignmentDate),
+  ukBoothDateShift: unique('uk_booth_date_shift').on(table.boothId, table.assignmentDate, table.shiftType),
+  ukUserDateShift: unique('uk_user_date_shift').on(table.userId, table.assignmentDate, table.shiftType),
   idxAssignmentDate: index('idx_assignment_date').on(table.assignmentDate),
   idxAssignmentUser: index('idx_assignment_user').on(table.userId),
   idxAssignmentBooth: index('idx_assignment_booth').on(table.boothId),

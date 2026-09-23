@@ -996,11 +996,12 @@ masterRouter.post('/booth-assignments', requireRole('ADMIN'), async (c) => {
       );
     }
 
-    // Validasi aturan: 1 Booth tidak boleh memiliki 2 penugasan pada tanggal yang sama
+    // Validasi aturan: 1 Booth tidak boleh memiliki 2 penugasan pada SHIFT YANG SAMA di tanggal yang sama
     const existingBoothAssignment = await db.query.boothAssignments.findFirst({
       where: and(
         eq(schema.boothAssignments.boothId, boothId),
-        eq(schema.boothAssignments.assignmentDate, date)
+        eq(schema.boothAssignments.assignmentDate, date),
+        eq(schema.boothAssignments.shiftType, validShiftType)
       ),
     });
     if (existingBoothAssignment) {
@@ -1009,18 +1010,19 @@ masterRouter.post('/booth-assignments', requireRole('ADMIN'), async (c) => {
           success: false,
           error: {
             code: 'BOOTH_ALREADY_ASSIGNED',
-            message: `Akses Ditolak: Booth "${booth.name}" sudah memiliki penugasan pada tanggal ${date}. Tidak boleh ada 2 shift di satu booth yang sama.`,
+            message: `Akses Ditolak: Booth "${booth.name}" sudah memiliki penugasan untuk Shift ${validShiftType === 'PAGI' ? 'Pagi (09:00 - 15:00)' : 'Sore (15:00 - 20:30)'} pada tanggal ${date}. 1 shift hanya boleh diisi 1 orang.`,
           },
         },
         400
       );
     }
 
-    // Validasi aturan: 1 Staf tidak boleh bertugas di 2 booth berbeda pada tanggal yang sama
+    // Validasi aturan: 1 Staf tidak boleh bertugas di 2 booth berbeda pada SHIFT YANG SAMA di tanggal yang sama
     const existingUserAssignment = await db.query.boothAssignments.findFirst({
       where: and(
         eq(schema.boothAssignments.userId, userId),
-        eq(schema.boothAssignments.assignmentDate, date)
+        eq(schema.boothAssignments.assignmentDate, date),
+        eq(schema.boothAssignments.shiftType, validShiftType)
       ),
     });
     if (existingUserAssignment) {
@@ -1029,7 +1031,7 @@ masterRouter.post('/booth-assignments', requireRole('ADMIN'), async (c) => {
           success: false,
           error: {
             code: 'USER_ALREADY_ASSIGNED',
-            message: `Staf ini sudah memiliki jadwal penugasan booth lain pada tanggal ${date}.`,
+            message: `Akses Ditolak: Staf "${targetUser.name}" sudah memiliki jadwal penugasan di booth lain untuk Shift ${validShiftType === 'PAGI' ? 'Pagi' : 'Sore'} pada tanggal ${date}.`,
           },
         },
         400
