@@ -271,7 +271,7 @@ shiftsRouter.post('/daily-reports/start', requireRole('BOOTH_ATTENDANT'), async 
       where: eq(schema.boothAssignments.userId, user.id),
     });
 
-    const assignment = userAssignments.find((a) => normalizeDate(a.assignmentDate) === today) || userAssignments[0];
+    const assignment = userAssignments.find((a) => normalizeDate(a.assignmentDate) === today);
     const targetBoothId: string | null = assignment?.boothId || null;
 
     if (!targetBoothId) {
