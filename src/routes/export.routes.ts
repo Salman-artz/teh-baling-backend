@@ -189,22 +189,23 @@ exportRouter.get('/export/sales', requireRole('ADMIN'), async (c) => {
       let stockItemsList: any[] = [];
 
       if (reportIds.length > 0) {
-        saleItemsList = await db
-          .select({
-            dailyReportId: schema.reportSaleItems.dailyReportId,
-            qtySold: schema.reportSaleItems.qtySold,
-            priceSnapshot: schema.reportSaleItems.priceSnapshot,
-          })
-          .from(schema.reportSaleItems)
-          .where(inArray(schema.reportSaleItems.dailyReportId, reportIds));
-
-        stockItemsList = await db
-          .select({
-            dailyReportId: schema.reportStockItems.dailyReportId,
-            qtySold: schema.reportStockItems.qtySold,
-          })
-          .from(schema.reportStockItems)
-          .where(inArray(schema.reportStockItems.dailyReportId, reportIds));
+        [saleItemsList, stockItemsList] = await Promise.all([
+          db
+            .select({
+              dailyReportId: schema.reportSaleItems.dailyReportId,
+              qtySold: schema.reportSaleItems.qtySold,
+              priceSnapshot: schema.reportSaleItems.priceSnapshot,
+            })
+            .from(schema.reportSaleItems)
+            .where(inArray(schema.reportSaleItems.dailyReportId, reportIds)),
+          db
+            .select({
+              dailyReportId: schema.reportStockItems.dailyReportId,
+              qtySold: schema.reportStockItems.qtySold,
+            })
+            .from(schema.reportStockItems)
+            .where(inArray(schema.reportStockItems.dailyReportId, reportIds)),
+        ]);
       }
 
       reports = rows.map((r) => {

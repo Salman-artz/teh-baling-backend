@@ -12,40 +12,38 @@ summaryRouter.get('/dashboard/today', requireRole('ADMIN'), async (c) => {
   try {
     const today = getWibDateString();
 
-    // 1. Ambil hanya booth yang AKTIF
-    const activeBooths = await db
-      .select()
-      .from(schema.booths)
-      .where(eq(schema.booths.isActive, true))
-      .orderBy(desc(schema.booths.createdAt));
-
-    // 2. Ambil laporan shift hari ini yang terhubung ke booth aktif
-    const todayReports = await db
-      .select({
-        id: schema.dailyReports.id,
-        boothId: schema.dailyReports.boothId,
-        attendantId: schema.dailyReports.attendantId,
-        cashModal: schema.dailyReports.cashModal,
-        cashFinal: schema.dailyReports.cashFinal,
-        status: schema.dailyReports.status,
-        attendantName: schema.users.name,
-      })
-      .from(schema.dailyReports)
-      .innerJoin(schema.booths, and(eq(schema.dailyReports.boothId, schema.booths.id), eq(schema.booths.isActive, true)))
-      .leftJoin(schema.users, eq(schema.dailyReports.attendantId, schema.users.id))
-      .where(eq(schema.dailyReports.reportDate, today));
-
-    // 3. Ambil jadwal penugasan hari ini yang terhubung ke booth aktif
-    const todayAssignments = await db
-      .select({
-        boothId: schema.boothAssignments.boothId,
-        userName: schema.users.name,
-        shiftType: schema.boothAssignments.shiftType,
-      })
-      .from(schema.boothAssignments)
-      .innerJoin(schema.booths, and(eq(schema.boothAssignments.boothId, schema.booths.id), eq(schema.booths.isActive, true)))
-      .leftJoin(schema.users, eq(schema.boothAssignments.userId, schema.users.id))
-      .where(eq(schema.boothAssignments.assignmentDate, today));
+    // Parallelize independent DB queries for instant response
+    const [activeBooths, todayReports, todayAssignments] = await Promise.all([
+      db
+        .select()
+        .from(schema.booths)
+        .where(eq(schema.booths.isActive, true))
+        .orderBy(desc(schema.booths.createdAt)),
+      db
+        .select({
+          id: schema.dailyReports.id,
+          boothId: schema.dailyReports.boothId,
+          attendantId: schema.dailyReports.attendantId,
+          cashModal: schema.dailyReports.cashModal,
+          cashFinal: schema.dailyReports.cashFinal,
+          status: schema.dailyReports.status,
+          attendantName: schema.users.name,
+        })
+        .from(schema.dailyReports)
+        .innerJoin(schema.booths, and(eq(schema.dailyReports.boothId, schema.booths.id), eq(schema.booths.isActive, true)))
+        .leftJoin(schema.users, eq(schema.dailyReports.attendantId, schema.users.id))
+        .where(eq(schema.dailyReports.reportDate, today)),
+      db
+        .select({
+          boothId: schema.boothAssignments.boothId,
+          userName: schema.users.name,
+          shiftType: schema.boothAssignments.shiftType,
+        })
+        .from(schema.boothAssignments)
+        .innerJoin(schema.booths, and(eq(schema.boothAssignments.boothId, schema.booths.id), eq(schema.booths.isActive, true)))
+        .leftJoin(schema.users, eq(schema.boothAssignments.userId, schema.users.id))
+        .where(eq(schema.boothAssignments.assignmentDate, today)),
+    ]);
 
     const currentHour = getWibCurrentHour();
 
@@ -315,36 +313,37 @@ summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN'), async (c) =>
     let stockItemsList: any[] = [];
 
     if (reportIds.length > 0) {
-      saleItemsList = await db
-        .select({
-          id: schema.reportSaleItems.id,
-          dailyReportId: schema.reportSaleItems.dailyReportId,
-          productId: schema.reportSaleItems.productId,
-          productName: schema.teaProducts.name,
-          cupTypeId: schema.reportSaleItems.cupTypeId,
-          cupTypeName: schema.cupTypes.name,
-          qtySold: schema.reportSaleItems.qtySold,
-          priceSnapshot: schema.reportSaleItems.priceSnapshot,
-        })
-        .from(schema.reportSaleItems)
-        .leftJoin(schema.teaProducts, eq(schema.reportSaleItems.productId, schema.teaProducts.id))
-        .leftJoin(schema.cupTypes, eq(schema.reportSaleItems.cupTypeId, schema.cupTypes.id))
-        .where(inArray(schema.reportSaleItems.dailyReportId, reportIds));
-
-      stockItemsList = await db
-        .select({
-          id: schema.reportStockItems.id,
-          dailyReportId: schema.reportStockItems.dailyReportId,
-          cupTypeId: schema.reportStockItems.cupTypeId,
-          cupTypeName: schema.cupTypes.name,
-          qtyInitial: schema.reportStockItems.qtyInitial,
-          qtyAdded: schema.reportStockItems.qtyAdded,
-          qtySold: schema.reportStockItems.qtySold,
-          priceSnapshot: schema.reportStockItems.priceSnapshot,
-        })
-        .from(schema.reportStockItems)
-        .leftJoin(schema.cupTypes, eq(schema.reportStockItems.cupTypeId, schema.cupTypes.id))
-        .where(inArray(schema.reportStockItems.dailyReportId, reportIds));
+      [saleItemsList, stockItemsList] = await Promise.all([
+        db
+          .select({
+            id: schema.reportSaleItems.id,
+            dailyReportId: schema.reportSaleItems.dailyReportId,
+            productId: schema.reportSaleItems.productId,
+            productName: schema.teaProducts.name,
+            cupTypeId: schema.reportSaleItems.cupTypeId,
+            cupTypeName: schema.cupTypes.name,
+            qtySold: schema.reportSaleItems.qtySold,
+            priceSnapshot: schema.reportSaleItems.priceSnapshot,
+          })
+          .from(schema.reportSaleItems)
+          .leftJoin(schema.teaProducts, eq(schema.reportSaleItems.productId, schema.teaProducts.id))
+          .leftJoin(schema.cupTypes, eq(schema.reportSaleItems.cupTypeId, schema.cupTypes.id))
+          .where(inArray(schema.reportSaleItems.dailyReportId, reportIds)),
+        db
+          .select({
+            id: schema.reportStockItems.id,
+            dailyReportId: schema.reportStockItems.dailyReportId,
+            cupTypeId: schema.reportStockItems.cupTypeId,
+            cupTypeName: schema.cupTypes.name,
+            qtyInitial: schema.reportStockItems.qtyInitial,
+            qtyAdded: schema.reportStockItems.qtyAdded,
+            qtySold: schema.reportStockItems.qtySold,
+            priceSnapshot: schema.reportStockItems.priceSnapshot,
+          })
+          .from(schema.reportStockItems)
+          .leftJoin(schema.cupTypes, eq(schema.reportStockItems.cupTypeId, schema.cupTypes.id))
+          .where(inArray(schema.reportStockItems.dailyReportId, reportIds)),
+      ]);
     }
 
     const formatted = dbReports.map((r) => {
