@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, ilike } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import * as schema from '../db/schema/index.js';
 import { AppEnv, AuthContextUser, requireRole } from '../middleware/auth.middleware.js';
@@ -69,6 +69,74 @@ function calculateDistanceMeters(lat1: number, lon1: number, lat2: number, lon2:
 }
 
 const MAX_ATTENDANCE_DISTANCE_METERS = 200;
+const KRAS_CENTRAL_LAT = -7.9546871;
+const KRAS_CENTRAL_LNG = 111.9627637;
+
+async function validateAttendanceLocation(
+  targetBoothId: string | null | undefined,
+  gpsLatitude: number | null | undefined,
+  gpsLongitude: number | null | undefined
+): Promise<{ valid: boolean; message?: string }> {
+  if (gpsLatitude == null || gpsLongitude == null) {
+    return {
+      valid: false,
+      message: 'Akses Ditolak: Lokasi GPS belum terdeteksi. Anda wajib mendeteksi lokasi GPS sebelum melanjutkan.',
+    };
+  }
+
+  let targetBoothName = 'Booth';
+  let distTarget: number | null = null;
+
+  if (targetBoothId) {
+    const booth = await db.query.booths.findFirst({
+      where: eq(schema.booths.id, targetBoothId),
+    });
+    if (booth) {
+      targetBoothName = booth.name || 'Booth';
+      if (booth.latitude && booth.longitude) {
+        const bLat = parseFloat(booth.latitude);
+        const bLng = parseFloat(booth.longitude);
+        if (!isNaN(bLat) && !isNaN(bLng)) {
+          distTarget = calculateDistanceMeters(bLat, bLng, gpsLatitude, gpsLongitude);
+        }
+      }
+    }
+  }
+
+  // Hitung jarak ke Pusat Produksi Kras (Outlet Kras)
+  let krasLat = KRAS_CENTRAL_LAT;
+  let krasLng = KRAS_CENTRAL_LNG;
+  try {
+    const krasBooth = await db.query.booths.findFirst({
+      where: and(eq(schema.booths.isActive, true), ilike(schema.booths.name, '%Kras%')),
+    });
+    if (krasBooth && krasBooth.latitude && krasBooth.longitude) {
+      const lat = parseFloat(krasBooth.latitude);
+      const lng = parseFloat(krasBooth.longitude);
+      if (!isNaN(lat) && !isNaN(lng)) {
+        krasLat = lat;
+        krasLng = lng;
+      }
+    }
+  } catch (err) {
+    // fallback to static coordinates
+  }
+
+  const distKras = calculateDistanceMeters(krasLat, krasLng, gpsLatitude, gpsLongitude);
+
+  // Jika dekat dengan target booth (<=200m) ATAU dekat dengan Pusat Produksi Kras (<=200m)
+  const isAtTarget = distTarget !== null && distTarget <= MAX_ATTENDANCE_DISTANCE_METERS;
+  const isAtKras = distKras <= MAX_ATTENDANCE_DISTANCE_METERS;
+
+  if (isAtTarget || isAtKras || distTarget === null) {
+    return { valid: true };
+  }
+
+  return {
+    valid: false,
+    message: `Akses Ditolak: Lokasi Anda saat ini berada di luar radius 200m dari ${targetBoothName} (${Math.round(distTarget)} meter) maupun Pusat Produksi Kras (${Math.round(distKras)} meter).`,
+  };
+}
 
 export const shiftsRouter = new Hono<AppEnv>();
 
@@ -216,41 +284,19 @@ shiftsRouter.post('/daily-reports/start', requireRole('BOOTH_ATTENDANT'), async 
       );
     }
 
-    // Validasi radius GPS maksimal 200 meter
-    const booth = await db.query.booths.findFirst({
-      where: eq(schema.booths.id, targetBoothId),
-    });
-
-    if (booth && booth.latitude && booth.longitude) {
-      const bLat = parseFloat(booth.latitude);
-      const bLng = parseFloat(booth.longitude);
-      if (!isNaN(bLat) && !isNaN(bLng)) {
-        if (gpsLatitude == null || gpsLongitude == null) {
-          return c.json(
-            {
-              success: false,
-              error: {
-                code: 'GPS_REQUIRED',
-                message: `Akses Ditolak: Lokasi GPS belum terdeteksi. Anda wajib mendeteksi lokasi GPS sebelum memulai shift di ${booth.name || 'Booth'}.`,
-              },
-            },
-            400
-          );
-        }
-        const dist = calculateDistanceMeters(bLat, bLng, gpsLatitude, gpsLongitude);
-        if (dist > MAX_ATTENDANCE_DISTANCE_METERS) {
-          return c.json(
-            {
-              success: false,
-              error: {
-                code: 'GPS_OUT_OF_RANGE',
-                message: `Akses Ditolak: Lokasi Anda (${Math.round(dist)} meter) berada di luar batas radius maksimal 200 meter dari booth (${booth.name || 'Booth'}). Anda tidak dapat memulai shift di luar radius.`,
-              },
-            },
-            400
-          );
-        }
-      }
+    // Validasi radius GPS maksimal 200 meter (Dual-Radius: Booth Tujuan ATAU Pusat Kras)
+    const locationCheck = await validateAttendanceLocation(targetBoothId, gpsLatitude, gpsLongitude);
+    if (!locationCheck.valid) {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'GPS_OUT_OF_RANGE',
+            message: locationCheck.message,
+          },
+        },
+        400
+      );
     }
 
     const [report] = await db
@@ -459,41 +505,20 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
     const assignment = userAssignments.find((a) => normalizeDate(a.assignmentDate) === today) || userAssignments[0];
     const targetBoothId = existingReport?.boothId || assignment?.boothId;
 
+    // Validasi radius GPS maksimal 200 meter (Dual-Radius: Booth Tujuan ATAU Pusat Kras)
     if (targetBoothId) {
-      const booth = await db.query.booths.findFirst({
-        where: eq(schema.booths.id, targetBoothId),
-      });
-
-      if (booth && booth.latitude && booth.longitude) {
-        const bLat = parseFloat(booth.latitude);
-        const bLng = parseFloat(booth.longitude);
-        if (!isNaN(bLat) && !isNaN(bLng)) {
-          if (gpsLatitude == null || gpsLongitude == null) {
-            return c.json(
-              {
-                success: false,
-                error: {
-                  code: 'GPS_REQUIRED',
-                  message: `Akses Ditolak: Lokasi GPS belum terdeteksi. Anda wajib mendeteksi lokasi GPS sebelum menutup shift di ${booth.name || 'Booth'}.`,
-                },
-              },
-              400
-            );
-          }
-          const dist = calculateDistanceMeters(bLat, bLng, gpsLatitude, gpsLongitude);
-          if (dist > MAX_ATTENDANCE_DISTANCE_METERS) {
-            return c.json(
-              {
-                success: false,
-                error: {
-                  code: 'GPS_OUT_OF_RANGE',
-                  message: `Akses Ditolak: Lokasi Anda (${Math.round(dist)} meter) berada di luar batas radius maksimal 200 meter dari booth (${booth.name || 'Booth'}). Anda tidak dapat menutup shift di luar radius.`,
-                },
-              },
-              400
-            );
-          }
-        }
+      const locationCheck = await validateAttendanceLocation(targetBoothId, gpsLatitude, gpsLongitude);
+      if (!locationCheck.valid) {
+        return c.json(
+          {
+            success: false,
+            error: {
+              code: 'GPS_OUT_OF_RANGE',
+              message: locationCheck.message,
+            },
+          },
+          400
+        );
       }
     }
 
