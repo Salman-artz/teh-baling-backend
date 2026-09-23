@@ -40,6 +40,7 @@ const dailyReportEndSchema = z.object({
         productId: z.string(),
         cupTypeId: z.string().optional(),
         qtySold: z.coerce.number().int().min(0),
+        priceSnapshot: z.coerce.number().int().min(0).optional(),
       })
     )
     .optional(),
@@ -620,17 +621,44 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
       // Simpan Item Penjualan Produk (Batch Insert)
       if (saleItems && Array.isArray(saleItems) && saleItems.length > 0) {
         await db.delete(schema.reportSaleItems).where(eq(schema.reportSaleItems.dailyReportId, finalReport.id));
+        
+        // Ambil mapping series cup untuk fallback harga
+        const allCupRules = await db.select().from(schema.seriesCupMappings);
+        const allProducts = await db.select().from(schema.teaProducts);
+        const productSeriesMap = new Map(allProducts.map((p) => [p.id, p.seriesId]));
+
         const saleRows = saleItems
           .filter((s) => s.productId && s.qtySold > 0)
           .map((s) => {
             const cupId = s.cupTypeId || defaultCupId;
-            const priceSnapshot = cupId ? (cupPriceMap.get(cupId) || 0) : 0;
+            let resolvedPrice = Number(s.priceSnapshot) || 0;
+
+            if (resolvedPrice <= 0 && cupId) {
+              const seriesId = productSeriesMap.get(s.productId);
+              if (seriesId) {
+                const matchedRule = allCupRules.find(
+                  (r) => r.seriesId === seriesId && r.cupTypeId === cupId && r.isActive
+                );
+                if (matchedRule && Number(matchedRule.price) > 0) {
+                  resolvedPrice = Number(matchedRule.price);
+                }
+              }
+            }
+
+            if (resolvedPrice <= 0 && cupId) {
+              resolvedPrice = Number(cupPriceMap.get(cupId)) || 0;
+            }
+
+            if (resolvedPrice <= 0) {
+              resolvedPrice = 10000; // Safety default fallback
+            }
+
             return {
               dailyReportId: finalReport.id,
               productId: s.productId,
               cupTypeId: cupId!,
               qtySold: s.qtySold,
-              priceSnapshot,
+              priceSnapshot: resolvedPrice,
             };
           })
           .filter((s) => Boolean(s.cupTypeId));
