@@ -315,7 +315,7 @@ shiftsRouter.post('/daily-reports/start', requireRole('BOOTH_ATTENDANT'), async 
         status: 'OPEN',
       })
       .onConflictDoUpdate({
-        target: [schema.dailyReports.boothId, schema.dailyReports.reportDate],
+        target: [schema.dailyReports.boothId, schema.dailyReports.reportDate, schema.dailyReports.shiftType],
         set: {
           cashModal,
           status: 'OPEN',
@@ -573,7 +573,7 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
           status: 'CLOSED',
         })
         .onConflictDoUpdate({
-          target: [schema.dailyReports.boothId, schema.dailyReports.reportDate],
+          target: [schema.dailyReports.boothId, schema.dailyReports.reportDate, schema.dailyReports.shiftType],
           set: {
             cashFinal,
             teaRemainingLiters: remainingTeaVal,
