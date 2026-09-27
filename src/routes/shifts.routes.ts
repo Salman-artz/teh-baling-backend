@@ -23,6 +23,7 @@ const dailyReportStartSchema = z.object({
 
 const dailyReportEndSchema = z.object({
   cashFinal: z.coerce.number().int().min(0, 'Uang akhir kasir tidak boleh bernilai negatif'),
+  qrisFinal: z.coerce.number().int().min(0, 'Setoran QRIS tidak boleh bernilai negatif').default(0).optional(),
   stockItems: z
     .array(
       z.object({
@@ -163,6 +164,7 @@ shiftsRouter.get('/daily-reports/today', requireRole('BOOTH_ATTENDANT'), async (
         shiftType: schema.dailyReports.shiftType,
         cashModal: schema.dailyReports.cashModal,
         cashFinal: schema.dailyReports.cashFinal,
+        qrisFinal: schema.dailyReports.qrisFinal,
         teaRemainingLiters: schema.dailyReports.teaRemainingLiters,
         status: schema.dailyReports.status,
         gpsTimeStart: schema.dailyReports.gpsTimeStart,
@@ -470,7 +472,7 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
       );
     }
 
-    const { cashFinal, stockItems, saleItems, teaRemainingLiters, notes, gpsLatitude, gpsLongitude, gpsAccuracy } = parseResult.data;
+    const { cashFinal, qrisFinal, stockItems, saleItems, teaRemainingLiters, notes, gpsLatitude, gpsLongitude, gpsAccuracy } = parseResult.data;
     const today = getWibDateString();
 
     const normalizeDate = (d: unknown): string => {
@@ -532,6 +534,7 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
         .update(schema.dailyReports)
         .set({
           cashFinal,
+          qrisFinal: qrisFinal || 0,
           teaRemainingLiters: remainingTeaVal,
           notes: notes || null,
           gpsLatEnd: gpsLatitude !== undefined && gpsLatitude !== null ? String(gpsLatitude) : null,
@@ -564,6 +567,7 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
           shiftType: assignment?.shiftType || 'PAGI',
           cashModal: 50000,
           cashFinal,
+          qrisFinal: qrisFinal || 0,
           teaRemainingLiters: remainingTeaVal,
           notes: notes || null,
           gpsLatEnd: gpsLatitude !== undefined && gpsLatitude !== null ? String(gpsLatitude) : null,
@@ -576,6 +580,7 @@ shiftsRouter.post('/daily-reports/end', requireRole('BOOTH_ATTENDANT'), async (c
           target: [schema.dailyReports.boothId, schema.dailyReports.reportDate, schema.dailyReports.shiftType],
           set: {
             cashFinal,
+            qrisFinal: qrisFinal || 0,
             teaRemainingLiters: remainingTeaVal,
             notes: notes || null,
             status: 'CLOSED',
@@ -687,6 +692,7 @@ shiftsRouter.get('/daily-reports/my', requireRole('BOOTH_ATTENDANT'), async (c) 
         boothName: schema.booths.name,
         cashModal: schema.dailyReports.cashModal,
         cashFinal: schema.dailyReports.cashFinal,
+        qrisFinal: schema.dailyReports.qrisFinal,
         status: schema.dailyReports.status,
         createdAt: schema.dailyReports.createdAt,
       })
@@ -698,13 +704,15 @@ shiftsRouter.get('/daily-reports/my', requireRole('BOOTH_ATTENDANT'), async (c) 
     const formatted = reports.map((r) => {
       const modal = r.cashModal || 0;
       const finalCash = r.cashFinal !== null ? r.cashFinal : null;
-      const revenue = finalCash !== null ? Math.max(0, finalCash - modal) : 0;
+      const qris = r.qrisFinal || 0;
+      const revenue = finalCash !== null ? Math.max(0, finalCash - modal) + qris : 0;
       return {
         id: r.id,
         date: r.date,
         boothName: r.boothName || 'Booth',
         modal,
         cashFinal: finalCash !== null ? finalCash : 0,
+        qrisFinal: qris,
         revenue,
         cupsSold: 0,
         variance: 0,
@@ -716,5 +724,341 @@ shiftsRouter.get('/daily-reports/my', requireRole('BOOTH_ATTENDANT'), async (c) 
   } catch (err) {
     console.error('[Get My Reports Error]:', err);
     return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal memuat riwayat shift' } }, 500);
+  }
+});
+
+// Schema for Admin / Operational Admin manual full entry
+const adminEntrySchema = z.object({
+  boothId: z.string().uuid('ID Booth wajib valid'),
+  reportDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Format tanggal wajib YYYY-MM-DD'),
+  shiftType: z.enum(['PAGI', 'SORE']),
+  attendantId: z.string().uuid('ID Petugas / Attendant wajib valid'),
+  cashModal: z.coerce.number().int().min(0, 'Modal cash tidak boleh negatif'),
+  cashFinal: z.coerce.number().int().min(0, 'Uang akhir kasir tidak boleh negatif'),
+  qrisFinal: z.coerce.number().int().min(0, 'Setoran QRIS tidak boleh negatif').default(0).optional(),
+  teaRemainingLiters: z.coerce.number().min(0, 'Sisa teh tidak boleh negatif').optional(),
+  notes: z.string().trim().optional().nullable(),
+  stockItems: z
+    .array(
+      z.object({
+        cupTypeId: z.string(),
+        qtyInitial: z.coerce.number().int().min(0).optional(),
+        qtyAdded: z.coerce.number().int().min(0).optional(),
+        qtyFinal: z.coerce.number().int().min(0).optional(),
+        qtySold: z.coerce.number().int().min(0).optional(),
+      })
+    )
+    .optional(),
+  saleItems: z
+    .array(
+      z.object({
+        productId: z.string(),
+        cupTypeId: z.string().optional(),
+        qtySold: z.coerce.number().int().min(0),
+        priceSnapshot: z.coerce.number().int().min(0).optional(),
+      })
+    )
+    .optional(),
+});
+
+// POST /daily-reports/admin-entry (Entri / Edit Laporan Shift Langsung oleh Admin / Admin Operasional)
+shiftsRouter.post('/daily-reports/admin-entry', requireRole('ADMIN', 'OPERATIONAL_ADMIN'), async (c) => {
+  try {
+    const adminUser = c.get('user') as AuthContextUser;
+    const rawBody = await c.req.json();
+    const parseResult = adminEntrySchema.safeParse(rawBody);
+
+    if (!parseResult.success) {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: parseResult.error.errors.map((e) => e.message).join(', '),
+          },
+        },
+        400
+      );
+    }
+
+    const {
+      boothId,
+      reportDate,
+      shiftType,
+      attendantId,
+      cashModal,
+      cashFinal,
+      qrisFinal,
+      teaRemainingLiters,
+      notes,
+      stockItems,
+      saleItems,
+    } = parseResult.data;
+
+    // 1. Pastikan Booth Assignment ada / update jika diperlukan
+    const existingAssignment = await db.query.boothAssignments.findFirst({
+      where: and(
+        eq(schema.boothAssignments.boothId, boothId),
+        eq(schema.boothAssignments.assignmentDate, reportDate),
+        eq(schema.boothAssignments.shiftType, shiftType)
+      ),
+    });
+
+    if (existingAssignment) {
+      if (existingAssignment.userId !== attendantId) {
+        await db
+          .update(schema.boothAssignments)
+          .set({ userId: attendantId })
+          .where(eq(schema.boothAssignments.id, existingAssignment.id));
+      }
+    } else {
+      // Hapus penugasan attendant lain yang mungkin bentrok di user yang sama pada shift itu jika ada
+      try {
+        await db.insert(schema.boothAssignments).values({
+          boothId,
+          userId: attendantId,
+          assignmentDate: reportDate,
+          shiftType,
+          createdBy: adminUser.id,
+        });
+      } catch (assignErr) {
+        console.warn('[Admin Entry Assignment Warning]:', assignErr);
+      }
+    }
+
+    // 2. Upsert Daily Report dengan status CLOSED
+    const remainingTeaVal = teaRemainingLiters !== undefined ? String(teaRemainingLiters) : '0';
+
+    const [report] = await db
+      .insert(schema.dailyReports)
+      .values({
+        boothId,
+        attendantId,
+        reportDate,
+        shiftType,
+        cashModal,
+        cashFinal,
+        qrisFinal: qrisFinal || 0,
+        teaRemainingLiters: remainingTeaVal,
+        notes: notes || null,
+        status: 'CLOSED',
+      })
+      .onConflictDoUpdate({
+        target: [schema.dailyReports.boothId, schema.dailyReports.reportDate, schema.dailyReports.shiftType],
+        set: {
+          attendantId,
+          cashModal,
+          cashFinal,
+          qrisFinal: qrisFinal || 0,
+          teaRemainingLiters: remainingTeaVal,
+          notes: notes || null,
+          status: 'CLOSED',
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+
+    if (!report) {
+      return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal membuat atau memperbarui record laporan' } }, 500);
+    }
+
+    // 3. Simpan Sisa Cup & Cup Terpakai
+    const allCupTypes = await db.query.cupTypes.findMany();
+    const cupPriceMap = new Map(allCupTypes.map((cp) => [cp.id, cp.price]));
+    const defaultCupId = allCupTypes[0]?.id;
+
+    if (stockItems && Array.isArray(stockItems)) {
+      await db.delete(schema.reportStockItems).where(eq(schema.reportStockItems.dailyReportId, report.id));
+      const stockRows = stockItems
+        .filter((item) => item.cupTypeId)
+        .map((item) => {
+          const priceSnapshot = cupPriceMap.get(item.cupTypeId) || 0;
+          const initial = item.qtyInitial ?? 0;
+          const added = item.qtyAdded ?? 0;
+          const final = item.qtyFinal ?? 0;
+          const totalAvailable = initial + added;
+          const sold = item.qtySold !== undefined ? item.qtySold : Math.max(0, totalAvailable - final);
+          return {
+            dailyReportId: report.id,
+            cupTypeId: item.cupTypeId,
+            qtyInitial: initial,
+            qtyAdded: added,
+            qtySold: sold,
+            priceSnapshot,
+          };
+        });
+
+      if (stockRows.length > 0) {
+        await db.insert(schema.reportStockItems).values(stockRows);
+      }
+    }
+
+    // 4. Simpan Penjualan Produk
+    if (saleItems && Array.isArray(saleItems)) {
+      await db.delete(schema.reportSaleItems).where(eq(schema.reportSaleItems.dailyReportId, report.id));
+
+      const allCupRules = await db.select().from(schema.seriesCupMappings);
+      const allProducts = await db.select().from(schema.teaProducts);
+      const productSeriesMap = new Map(allProducts.map((p) => [p.id, p.seriesId]));
+
+      const saleRows = saleItems
+        .filter((s) => s.productId && s.qtySold > 0)
+        .map((s) => {
+          const cupId = s.cupTypeId || defaultCupId;
+          let resolvedPrice = Number(s.priceSnapshot) || 0;
+
+          if (resolvedPrice <= 0 && cupId) {
+            const seriesId = productSeriesMap.get(s.productId);
+            if (seriesId) {
+              const matchedRule = allCupRules.find(
+                (r) => r.seriesId === seriesId && r.cupTypeId === cupId && r.isActive
+              );
+              if (matchedRule && Number(matchedRule.price) > 0) {
+                resolvedPrice = Number(matchedRule.price);
+              }
+            }
+          }
+
+          if (resolvedPrice <= 0 && cupId) {
+            resolvedPrice = Number(cupPriceMap.get(cupId)) || 0;
+          }
+
+          if (resolvedPrice <= 0) {
+            resolvedPrice = 10000;
+          }
+
+          return {
+            dailyReportId: report.id,
+            productId: s.productId,
+            cupTypeId: cupId!,
+            qtySold: s.qtySold,
+            priceSnapshot: resolvedPrice,
+          };
+        })
+        .filter((s) => Boolean(s.cupTypeId));
+
+      if (saleRows.length > 0) {
+        await db.insert(schema.reportSaleItems).values(saleRows);
+      }
+    }
+
+    return c.json({
+      success: true,
+      message: `Laporan shift booth berhasil disimpan dan disinkronkan.`,
+      data: report,
+    });
+  } catch (err: unknown) {
+    const errorDetail = err instanceof Error ? err.message : String(err);
+    console.error('[Admin Entry Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: `Gagal menyimpan laporan shift: ${errorDetail}` } }, 500);
+  }
+});
+
+// GET /daily-reports/admin-detail (Ambil Detail Laporan Shift berdasarkan Booth, Tanggal, & Shift)
+shiftsRouter.get('/daily-reports/admin-detail', requireRole('ADMIN', 'OPERATIONAL_ADMIN'), async (c) => {
+  try {
+    const boothId = c.req.query('boothId');
+    const date = c.req.query('date') || getWibDateString();
+    const shiftType = (c.req.query('shiftType') || 'PAGI') as 'PAGI' | 'SORE';
+
+    if (!boothId) {
+      return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Parameter boothId wajib disertakan' } }, 400);
+    }
+
+    const reportsList = await db
+      .select({
+        id: schema.dailyReports.id,
+        boothId: schema.dailyReports.boothId,
+        boothName: schema.booths.name,
+        boothAddress: schema.booths.address,
+        attendantId: schema.dailyReports.attendantId,
+        attendantName: schema.users.name,
+        attendantEmail: schema.users.email,
+        reportDate: schema.dailyReports.reportDate,
+        shiftType: schema.dailyReports.shiftType,
+        cashModal: schema.dailyReports.cashModal,
+        cashFinal: schema.dailyReports.cashFinal,
+        qrisFinal: schema.dailyReports.qrisFinal,
+        teaRemainingLiters: schema.dailyReports.teaRemainingLiters,
+        notes: schema.dailyReports.notes,
+        status: schema.dailyReports.status,
+        createdAt: schema.dailyReports.createdAt,
+      })
+      .from(schema.dailyReports)
+      .leftJoin(schema.booths, eq(schema.dailyReports.boothId, schema.booths.id))
+      .leftJoin(schema.users, eq(schema.dailyReports.attendantId, schema.users.id))
+      .where(
+        and(
+          eq(schema.dailyReports.boothId, boothId),
+          eq(schema.dailyReports.reportDate, date),
+          eq(schema.dailyReports.shiftType, shiftType)
+        )
+      )
+      .limit(1);
+
+    const report = reportsList[0] || null;
+
+    if (!report) {
+      // Periksa apakah ada assignment terjadwal untuk booth ini
+      const assignments = await db
+        .select({
+          id: schema.boothAssignments.id,
+          userId: schema.boothAssignments.userId,
+          userName: schema.users.name,
+          userEmail: schema.users.email,
+        })
+        .from(schema.boothAssignments)
+        .leftJoin(schema.users, eq(schema.boothAssignments.userId, schema.users.id))
+        .where(
+          and(
+            eq(schema.boothAssignments.boothId, boothId),
+            eq(schema.boothAssignments.assignmentDate, date),
+            eq(schema.boothAssignments.shiftType, shiftType)
+          )
+        )
+        .limit(1);
+
+      const assignment = assignments[0] || null;
+
+      return c.json({
+        success: true,
+        data: {
+          report: null,
+          assignment: assignment
+            ? {
+                id: assignment.id,
+                userId: assignment.userId,
+                userName: assignment.userName,
+                userEmail: assignment.userEmail,
+              }
+            : null,
+        },
+      });
+    }
+
+    const [stockItems, saleItems] = await Promise.all([
+      db.query.reportStockItems.findMany({
+        where: eq(schema.reportStockItems.dailyReportId, report.id),
+      }),
+      db.query.reportSaleItems.findMany({
+        where: eq(schema.reportSaleItems.dailyReportId, report.id),
+      }),
+    ]);
+
+    return c.json({
+      success: true,
+      data: {
+        report: {
+          ...report,
+          teaRemainingLiters: parseFloat(report.teaRemainingLiters || '0') || 0,
+          stockItems,
+          saleItems,
+        },
+        assignment: null,
+      },
+    });
+  } catch (err) {
+    console.error('[Admin Detail Error]:', err);
+    return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal mengambil detail laporan shift' } }, 500);
   }
 });

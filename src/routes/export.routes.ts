@@ -150,7 +150,7 @@ function createStyledExcelWorkbook(options: {
 export const exportRouter = new Hono<AppEnv>();
 
 // GET /export/sales
-exportRouter.get('/export/sales', requireRole('ADMIN'), async (c) => {
+exportRouter.get('/export/sales', requireRole('ADMIN', 'OPERATIONAL_ADMIN'), async (c) => {
   try {
     const { from, to, boothId } = c.req.query();
     const today = getWibDateString();
@@ -175,6 +175,7 @@ exportRouter.get('/export/sales', requireRole('ADMIN'), async (c) => {
           attendantName: schema.users.name,
           cashModal: schema.dailyReports.cashModal,
           cashFinal: schema.dailyReports.cashFinal,
+          qrisFinal: schema.dailyReports.qrisFinal,
           status: schema.dailyReports.status,
         })
         .from(schema.dailyReports)
@@ -211,6 +212,7 @@ exportRouter.get('/export/sales', requireRole('ADMIN'), async (c) => {
       reports = rows.map((r) => {
         const modal = Number(r.cashModal || 0);
         const final = r.cashFinal !== null ? Number(r.cashFinal) : null;
+        const qris = Number(r.qrisFinal || 0);
         
         const sales = saleItemsList.filter((s) => s.dailyReportId === r.id);
         const stocks = stockItemsList.filter((st) => st.dailyReportId === r.id);
@@ -218,7 +220,7 @@ exportRouter.get('/export/sales', requireRole('ADMIN'), async (c) => {
         const calculatedRevenue = sales.reduce((acc, s) => acc + (s.qtySold * s.priceSnapshot), 0);
         const revenue = calculatedRevenue > 0
           ? calculatedRevenue
-          : (final !== null ? Math.max(0, final - modal) : 0);
+          : (final !== null ? Math.max(0, final - modal) + qris : 0);
 
         let cupsSold = sales.reduce((acc, s) => acc + s.qtySold, 0);
         if (cupsSold === 0 && stocks.length > 0) {
@@ -229,10 +231,11 @@ exportRouter.get('/export/sales', requireRole('ADMIN'), async (c) => {
         }
 
         const expectedCash = modal + revenue;
-        const cashVariance = final !== null ? final - expectedCash : 0;
+        const cashVariance = final !== null ? (final + qris) - expectedCash : 0;
 
         return {
           ...r,
+          qrisFinal: qris,
           revenue,
           cupsSold,
           cashVariance,
@@ -244,6 +247,7 @@ exportRouter.get('/export/sales', requireRole('ADMIN'), async (c) => {
 
     let totModal = 0;
     let totFinal = 0;
+    let totQris = 0;
     let totRevenue = 0;
     let totCups = 0;
     let totVariance = 0;
@@ -251,12 +255,14 @@ exportRouter.get('/export/sales', requireRole('ADMIN'), async (c) => {
     const formattedRows = reports.map((r, idx) => {
       const modal = Number(r.cashModal) || 0;
       const final = Number(r.cashFinal) || 0;
-      const rev = Number(r.revenue) || (final > modal ? final - modal : 0);
+      const qris = Number(r.qrisFinal) || 0;
+      const rev = Number(r.revenue) || (final > modal ? final - modal + qris : 0);
       const cups = Number(r.cupsSold) || Math.round(rev / 11000);
       const varCash = Number(r.cashVariance) || 0;
 
       totModal += modal;
       totFinal += final;
+      totQris += qris;
       totRevenue += rev;
       totCups += cups;
       totVariance += varCash;
@@ -269,6 +275,7 @@ exportRouter.get('/export/sales', requireRole('ADMIN'), async (c) => {
         attendantName: r.attendantName || 'Staf Penjaga',
         modal,
         final,
+        qris,
         revenue: rev,
         cups,
         variance: varCash,
@@ -287,7 +294,8 @@ exportRouter.get('/export/sales', requireRole('ADMIN'), async (c) => {
         { header: 'Alamat Lokasi', key: 'boothAddress', width: 30, align: 'left' },
         { header: 'Staf Penjaga', key: 'attendantName', width: 20, align: 'left' },
         { header: 'Modal Awal (Rp)', key: 'modal', width: 17, align: 'right', numFmt: '"Rp "#,##0' },
-        { header: 'Kas Akhir (Rp)', key: 'final', width: 17, align: 'right', numFmt: '"Rp "#,##0' },
+        { header: 'Kas Akhir Tunai (Rp)', key: 'final', width: 17, align: 'right', numFmt: '"Rp "#,##0' },
+        { header: 'Setoran QRIS (Rp)', key: 'qris', width: 17, align: 'right', numFmt: '"Rp "#,##0' },
         { header: 'Total Penjualan (Rp)', key: 'revenue', width: 20, align: 'right', numFmt: '"Rp "#,##0' },
         { header: 'Cup Terjual', key: 'cups', width: 14, align: 'right', numFmt: '#,##0" Cup"' },
         { header: 'Selisih Kas (Rp)', key: 'variance', width: 17, align: 'right', numFmt: '"Rp "#,##0' },
@@ -300,6 +308,7 @@ exportRouter.get('/export/sales', requireRole('ADMIN'), async (c) => {
         values: {
           modal: totModal,
           final: totFinal,
+          qris: totQris,
           revenue: totRevenue,
           cups: totCups,
           variance: totVariance,
@@ -319,7 +328,7 @@ exportRouter.get('/export/sales', requireRole('ADMIN'), async (c) => {
 });
 
 // GET /export/shift-assignments
-exportRouter.get('/export/shift-assignments', requireRole('ADMIN'), async (c) => {
+exportRouter.get('/export/shift-assignments', requireRole('ADMIN', 'OPERATIONAL_ADMIN'), async (c) => {
   try {
     const { date, boothId } = c.req.query();
     const today = getWibDateString();

@@ -8,7 +8,7 @@ import { getWibDateString, getWibCurrentHour } from '../utils/date.js';
 export const summaryRouter = new Hono<AppEnv>();
 
 // GET /dashboard/today (HANYA DARI BOOTH YANG AKTIF)
-summaryRouter.get('/dashboard/today', requireRole('ADMIN'), async (c) => {
+summaryRouter.get('/dashboard/today', requireRole('ADMIN', 'OPERATIONAL_ADMIN'), async (c) => {
   try {
     const today = getWibDateString();
 
@@ -26,6 +26,7 @@ summaryRouter.get('/dashboard/today', requireRole('ADMIN'), async (c) => {
           attendantId: schema.dailyReports.attendantId,
           cashModal: schema.dailyReports.cashModal,
           cashFinal: schema.dailyReports.cashFinal,
+          qrisFinal: schema.dailyReports.qrisFinal,
           status: schema.dailyReports.status,
           attendantName: schema.users.name,
         })
@@ -56,7 +57,8 @@ summaryRouter.get('/dashboard/today', requireRole('ADMIN'), async (c) => {
 
       const cashModal = rep?.cashModal || 0;
       const cashFinal = rep?.cashFinal || 0;
-      const revenue = Math.max(0, cashFinal - cashModal);
+      const qrisFinal = rep?.qrisFinal || 0;
+      const revenue = Math.max(0, cashFinal - cashModal) + qrisFinal;
       const variance = 0;
 
       totalRevenue += revenue;
@@ -95,7 +97,7 @@ summaryRouter.get('/dashboard/today', requireRole('ADMIN'), async (c) => {
 });
 
 // GET /dashboard/chart (HANYA DARI BOOTH YANG AKTIF)
-summaryRouter.get('/dashboard/chart', requireRole('ADMIN'), async (c) => {
+summaryRouter.get('/dashboard/chart', requireRole('ADMIN', 'OPERATIONAL_ADMIN'), async (c) => {
   try {
     const boothId = c.req.query('boothId') || 'ALL';
     const period = c.req.query('period') || 'hourly';
@@ -119,6 +121,7 @@ summaryRouter.get('/dashboard/chart', requireRole('ADMIN'), async (c) => {
           reportDate: schema.dailyReports.reportDate,
           cashModal: schema.dailyReports.cashModal,
           cashFinal: schema.dailyReports.cashFinal,
+          qrisFinal: schema.dailyReports.qrisFinal,
           status: schema.dailyReports.status,
         })
         .from(schema.dailyReports)
@@ -129,7 +132,7 @@ summaryRouter.get('/dashboard/chart', requireRole('ADMIN'), async (c) => {
       let totalCups = 0;
 
       todayReports.forEach((r) => {
-        const rev = Math.max(0, (r.cashFinal || 0) - (r.cashModal || 0));
+        const rev = Math.max(0, (r.cashFinal || 0) - (r.cashModal || 0)) + (r.qrisFinal || 0);
         totalRevenue += rev;
         totalCups += Math.round(rev / 10000);
       });
@@ -185,6 +188,7 @@ summaryRouter.get('/dashboard/chart', requireRole('ADMIN'), async (c) => {
           reportDate: schema.dailyReports.reportDate,
           cashModal: schema.dailyReports.cashModal,
           cashFinal: schema.dailyReports.cashFinal,
+          qrisFinal: schema.dailyReports.qrisFinal,
         })
         .from(schema.dailyReports)
         .innerJoin(schema.booths, and(eq(schema.dailyReports.boothId, schema.booths.id), eq(schema.booths.isActive, true)))
@@ -196,7 +200,7 @@ summaryRouter.get('/dashboard/chart', requireRole('ADMIN'), async (c) => {
         let cups = 0;
 
         dayReports.forEach((r) => {
-          const rev = Math.max(0, (r.cashFinal || 0) - (r.cashModal || 0));
+          const rev = Math.max(0, (r.cashFinal || 0) - (r.cashModal || 0)) + (r.qrisFinal || 0);
           revenue += rev;
           cups += Math.round(rev / 10000);
         });
@@ -235,6 +239,7 @@ summaryRouter.get('/dashboard/chart', requireRole('ADMIN'), async (c) => {
         reportDate: schema.dailyReports.reportDate,
         cashModal: schema.dailyReports.cashModal,
         cashFinal: schema.dailyReports.cashFinal,
+        qrisFinal: schema.dailyReports.qrisFinal,
       })
       .from(schema.dailyReports)
       .innerJoin(schema.booths, and(eq(schema.dailyReports.boothId, schema.booths.id), eq(schema.booths.isActive, true)))
@@ -244,7 +249,7 @@ summaryRouter.get('/dashboard/chart', requireRole('ADMIN'), async (c) => {
     let monthCups = 0;
 
     monthReports.forEach((r) => {
-      const rev = Math.max(0, (r.cashFinal || 0) - (r.cashModal || 0));
+      const rev = Math.max(0, (r.cashFinal || 0) - (r.cashModal || 0)) + (r.qrisFinal || 0);
       monthRevenue += rev;
       monthCups += Math.round(rev / 10000);
     });
@@ -273,7 +278,7 @@ summaryRouter.get('/dashboard/chart', requireRole('ADMIN'), async (c) => {
 });
 
 // GET /dashboard/summary-table (HANYA DARI BOOTH YANG AKTIF DENGAN DETAIL RINCIAN CUP & MENU)
-summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN'), async (c) => {
+summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN', 'OPERATIONAL_ADMIN'), async (c) => {
   try {
     const fromDate = c.req.query('from');
     const toDate = c.req.query('to');
@@ -296,6 +301,7 @@ summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN'), async (c) =>
         attendantName: schema.users.name,
         cashModal: schema.dailyReports.cashModal,
         cashFinal: schema.dailyReports.cashFinal,
+        qrisFinal: schema.dailyReports.qrisFinal,
         teaRemainingLiters: schema.dailyReports.teaRemainingLiters,
         notes: schema.dailyReports.notes,
         status: schema.dailyReports.status,
@@ -349,6 +355,7 @@ summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN'), async (c) =>
     const formatted = dbReports.map((r) => {
       const modal = r.cashModal || 0;
       const finalCash = r.cashFinal !== null ? r.cashFinal : null;
+      const qris = r.qrisFinal || 0;
       
       const sales = saleItemsList.filter((s) => s.dailyReportId === r.id);
       const stocks = stockItemsList.filter((st) => st.dailyReportId === r.id);
@@ -356,7 +363,7 @@ summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN'), async (c) =>
       const calculatedRevenue = sales.reduce((acc, s) => acc + (s.qtySold * s.priceSnapshot), 0);
       const revenue = calculatedRevenue > 0 
         ? calculatedRevenue 
-        : (finalCash !== null ? Math.max(0, finalCash - modal) : 0);
+        : (finalCash !== null ? Math.max(0, finalCash - modal) + qris : 0);
 
       // Hitung total cup terjual dari sale items atau stock items
       let cupsSold = sales.reduce((acc, s) => acc + s.qtySold, 0);
@@ -386,7 +393,7 @@ summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN'), async (c) =>
       }));
 
       const expectedTotalCash = modal + revenue;
-      const variance = finalCash !== null ? finalCash - expectedTotalCash : 0;
+      const variance = finalCash !== null ? (finalCash + qris) - expectedTotalCash : 0;
 
       return {
         id: r.id,
@@ -398,6 +405,7 @@ summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN'), async (c) =>
         attendantName: r.attendantName || 'Staf Booth',
         cashModal: modal,
         cashFinal: finalCash,
+        qrisFinal: qris,
         revenue,
         cupsSold,
         cupBreakdown,
@@ -473,7 +481,7 @@ summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN'), async (c) =>
 });
 
 // GET /dashboard/booth-comparison (HANYA DARI BOOTH YANG AKTIF)
-summaryRouter.get('/dashboard/booth-comparison', requireRole('ADMIN'), async (c) => {
+summaryRouter.get('/dashboard/booth-comparison', requireRole('ADMIN', 'OPERATIONAL_ADMIN'), async (c) => {
   try {
     const range = c.req.query('range') || 'today';
     const today = getWibDateString();
@@ -504,6 +512,7 @@ summaryRouter.get('/dashboard/booth-comparison', requireRole('ADMIN'), async (c)
         reportDate: schema.dailyReports.reportDate,
         cashModal: schema.dailyReports.cashModal,
         cashFinal: schema.dailyReports.cashFinal,
+        qrisFinal: schema.dailyReports.qrisFinal,
         status: schema.dailyReports.status,
       })
       .from(schema.dailyReports)
@@ -516,7 +525,7 @@ summaryRouter.get('/dashboard/booth-comparison', requireRole('ADMIN'), async (c)
       let totalCups = 0;
 
       boothReports.forEach((r) => {
-        const rev = Math.max(0, (r.cashFinal || 0) - (r.cashModal || 0));
+        const rev = Math.max(0, (r.cashFinal || 0) - (r.cashModal || 0)) + (r.qrisFinal || 0);
         totalRevenue += rev;
         totalCups += Math.round(rev / 10000);
       });

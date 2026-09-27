@@ -29,7 +29,7 @@ export const masterRouter = new Hono<AppEnv>();
 // TEA SERIES
 // =============================================================================
 
-masterRouter.get('/tea-series', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION'), async (c) => {
+masterRouter.get('/tea-series', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION', 'OPERATIONAL_ADMIN'), async (c) => {
   try {
     const showAll = c.req.query('all') === 'true';
     const user = c.get('user') as AuthContextUser;
@@ -123,7 +123,7 @@ masterRouter.delete('/tea-series/:id', requireRole('ADMIN'), async (c) => {
 // TEA PRODUCTS
 // =============================================================================
 
-masterRouter.get('/tea-products', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION'), async (c) => {
+masterRouter.get('/tea-products', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION', 'OPERATIONAL_ADMIN'), async (c) => {
   try {
     const showAll = c.req.query('all') === 'true';
     const user = c.get('user') as AuthContextUser;
@@ -257,7 +257,7 @@ masterRouter.delete('/tea-products/:id', requireRole('ADMIN'), async (c) => {
 // CUP TYPES
 // =============================================================================
 
-masterRouter.get('/cup-types', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION'), async (c) => {
+masterRouter.get('/cup-types', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION', 'OPERATIONAL_ADMIN'), async (c) => {
   try {
     const showAll = c.req.query('all') === 'true';
     const user = c.get('user') as AuthContextUser;
@@ -353,7 +353,7 @@ masterRouter.delete('/cup-types/:id', requireRole('ADMIN'), async (c) => {
 
 let serverCupRulesFallback: any[] = [];
 
-masterRouter.get('/cup-rules', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION'), async (c) => {
+masterRouter.get('/cup-rules', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION', 'OPERATIONAL_ADMIN'), async (c) => {
   try {
     const mappings = await db
       .select({
@@ -478,7 +478,7 @@ masterRouter.post('/cup-rules', requireRole('ADMIN'), async (c) => {
 // BOOTHS
 // =============================================================================
 
-masterRouter.get('/booths', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION'), async (c) => {
+masterRouter.get('/booths', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION', 'OPERATIONAL_ADMIN'), async (c) => {
   try {
     const status = c.req.query('status');
     let list;
@@ -662,7 +662,7 @@ masterRouter.get('/booths/resolve-gmaps', async (c) => {
 // USER MANAGEMENT
 // =============================================================================
 
-masterRouter.get('/users', requireRole('ADMIN'), async (c) => {
+masterRouter.get('/users', requireRole('ADMIN', 'OPERATIONAL_ADMIN'), async (c) => {
   try {
     const roleQuery = c.req.query('role');
     let list = await db
@@ -887,7 +887,7 @@ masterRouter.delete('/users/:id', requireRole('ADMIN'), async (c) => {
 // BOOTH ASSIGNMENTS (PENUGASAN SHIFT BOOTH)
 // =============================================================================
 
-masterRouter.get('/booth-assignments', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION'), async (c) => {
+masterRouter.get('/booth-assignments', requireRole('ADMIN', 'BOOTH_ATTENDANT', 'PRODUCTION', 'OPERATIONAL_ADMIN'), async (c) => {
   try {
     const dateQuery = c.req.query('date');
     const boothIdQuery = c.req.query('boothId');
@@ -950,7 +950,7 @@ masterRouter.get('/booth-assignments', requireRole('ADMIN', 'BOOTH_ATTENDANT', '
   }
 });
 
-masterRouter.post('/booth-assignments', requireRole('ADMIN'), async (c) => {
+masterRouter.post('/booth-assignments', requireRole('ADMIN', 'OPERATIONAL_ADMIN'), async (c) => {
   try {
     const rawBody = await c.req.json();
     const { boothId, userId, date, shiftType } = rawBody;
@@ -1056,7 +1056,7 @@ masterRouter.post('/booth-assignments', requireRole('ADMIN'), async (c) => {
   }
 });
 
-masterRouter.delete('/booth-assignments/:id', requireRole('ADMIN'), async (c) => {
+masterRouter.delete('/booth-assignments/:id', requireRole('ADMIN', 'OPERATIONAL_ADMIN'), async (c) => {
   try {
     const id = c.req.param('id');
     if (!id) {
