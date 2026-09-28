@@ -34,7 +34,7 @@ export async function signAccessToken(payload: { id: string; email: string; role
     .sign(JWT_SECRET);
 }
 
-export async function signRefreshToken(payload: { id: string; email: string }) {
+export async function signRefreshToken(payload: { id: string; email: string; role: string }) {
   return new SignJWT(payload)
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()

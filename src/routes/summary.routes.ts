@@ -283,11 +283,13 @@ summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN', 'OPERATIONAL_
     const fromDate = c.req.query('from');
     const toDate = c.req.query('to');
     const boothId = c.req.query('boothId');
+    const shift = c.req.query('shift') || c.req.query('shiftType');
 
     const conditions = [eq(schema.booths.isActive, true)];
     if (fromDate) conditions.push(gte(schema.dailyReports.reportDate, fromDate));
     if (toDate) conditions.push(lte(schema.dailyReports.reportDate, toDate));
     if (boothId && boothId !== 'ALL') conditions.push(eq(schema.dailyReports.boothId, boothId));
+    if (shift && shift !== 'ALL') conditions.push(eq(schema.dailyReports.shiftType, shift));
 
     const dbReports = await db
       .select({

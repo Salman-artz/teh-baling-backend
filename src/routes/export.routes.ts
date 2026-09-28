@@ -152,7 +152,8 @@ export const exportRouter = new Hono<AppEnv>();
 // GET /export/sales
 exportRouter.get('/export/sales', requireRole('ADMIN', 'OPERATIONAL_ADMIN'), async (c) => {
   try {
-    const { from, to, boothId } = c.req.query();
+    const { from, to, boothId, shift, shiftType } = c.req.query();
+    const selectedShift = shift || shiftType;
     const today = getWibDateString();
     const fromDate = from || today;
     const toDate = to || today;
@@ -161,6 +162,7 @@ exportRouter.get('/export/sales', requireRole('ADMIN', 'OPERATIONAL_ADMIN'), asy
     if (from) conditions.push(gte(schema.dailyReports.reportDate, from));
     if (to) conditions.push(lte(schema.dailyReports.reportDate, to));
     if (boothId && boothId !== 'ALL') conditions.push(eq(schema.dailyReports.boothId, boothId));
+    if (selectedShift && selectedShift !== 'ALL') conditions.push(eq(schema.dailyReports.shiftType, selectedShift));
 
     let reports: any[] = [];
     try {

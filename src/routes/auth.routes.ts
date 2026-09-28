@@ -103,7 +103,7 @@ authRouter.post('/login', async (c) => {
     emailLockouts.delete(normalizedEmail);
 
     const accessToken = await signAccessToken({ id: user.id, email: user.email, role: user.role });
-    const refreshToken = await signRefreshToken({ id: user.id, email: user.email });
+    const refreshToken = await signRefreshToken({ id: user.id, email: user.email, role: user.role });
 
     return c.json({
       success: true,
@@ -153,7 +153,7 @@ authRouter.post('/refresh', async (c) => {
     }
 
     const newAccessToken = await signAccessToken({ id: user.id, email: user.email, role: user.role });
-    const newRefreshToken = await signRefreshToken({ id: user.id, email: user.email });
+    const newRefreshToken = await signRefreshToken({ id: user.id, email: user.email, role: user.role });
 
     return c.json({
       success: true,
