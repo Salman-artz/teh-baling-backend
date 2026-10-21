@@ -20,6 +20,18 @@ Frontend terkait: [teh-baling-frontend](https://github.com/Salman-artz/teh-balin
   <em>Verifikasi Presensi Barista dengan Validasi Radius Lokasi GPS (Formula Haversine 200m)</em>
 </p>
 
+<details>
+<summary><strong>Lihat Dokumentasi Screenshot Role Lainnya ▾</strong></summary>
+
+| Role & Modul | Tampilan Antarmuka |
+|--------------|--------------------|
+| **Autentikasi & Login Penjaga Booth**<br/>Portal login role `BOOTH_ATTENDANT` dengan active session detector. | <img src="screenshots/foto5_login_role_penjaga_booth.png" alt="Login Role Penjaga Booth" width="450" /> |
+| **Dashboard Operasional Penjaga Booth**<br/>Verifikasi penugasan shift outlet harian dan pencatatan kasir barista. | <img src="screenshots/foto6_portal_penjaga_booth.png" alt="Portal Penjaga Booth" width="450" /> |
+| **Autentikasi & Login Tim Produksi**<br/>Portal login role `PRODUCTION` dengan route protection & RBAC. | <img src="screenshots/foto7_login_role_tim_produksi.png" alt="Login Role Tim Produksi" width="450" /> |
+| **Modul Dapur Memasak & Logistik**<br/>Pencatatan batch volume masak teh harian dan pengiriman booth cabang. | <img src="screenshots/foto8_portal_tim_produksi.png" alt="Portal Dapur Tim Produksi" width="450" /> |
+
+</details>
+
 ---
 
 ## ✨ Fitur Backend
