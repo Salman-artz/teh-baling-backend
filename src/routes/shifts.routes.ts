@@ -1062,3 +1062,77 @@ shiftsRouter.get('/daily-reports/admin-detail', requireRole('ADMIN', 'OPERATIONA
     return c.json({ success: false, error: { code: 'SERVER_ERROR', message: 'Gagal mengambil detail laporan shift' } }, 500);
   }
 });
+
+// PATCH /daily-reports/:id (Edit Laporan Penjualan Shift oleh Admin)
+shiftsRouter.patch('/daily-reports/:id', requireRole('ADMIN', 'OPERATIONAL_ADMIN'), async (c) => {
+  try {
+    const id = c.req.param('id');
+    if (!id) {
+      return c.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'ID laporan wajib disertakan' } }, 400);
+    }
+    const rawBody = await c.req.json();
+
+    const patchSchema = z.object({
+      cashModal: z.coerce.number().int().min(0, 'Modal tidak boleh negatif').optional(),
+      cashFinal: z.coerce.number().int().min(0, 'Kas akhir tidak boleh negatif').nullable().optional(),
+      qrisFinal: z.coerce.number().int().min(0, 'QRIS tidak boleh negatif').optional(),
+      teaRemainingLiters: z.coerce.number().min(0, 'Sisa teh tidak boleh negatif').optional(),
+      notes: z.string().trim().nullable().optional(),
+      status: z.enum(['OPEN', 'CLOSED']).optional(),
+      attendantId: z.string().uuid('ID Petugas tidak valid').optional(),
+    });
+
+    const parseResult = patchSchema.safeParse(rawBody);
+    if (!parseResult.success) {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: parseResult.error.errors.map((e) => e.message).join(', '),
+          },
+        },
+        400
+      );
+    }
+
+    const [existing] = await db.select().from(schema.dailyReports).where(eq(schema.dailyReports.id, id)).limit(1);
+    if (!existing) {
+      return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Laporan shift tidak ditemukan' } }, 404);
+    }
+
+    const { cashModal, cashFinal, qrisFinal, teaRemainingLiters, notes, status, attendantId } = parseResult.data;
+
+    const updatePayload: Record<string, any> = {
+      updatedAt: new Date(),
+    };
+
+    if (cashModal !== undefined) updatePayload.cashModal = cashModal;
+    if (cashFinal !== undefined) updatePayload.cashFinal = cashFinal;
+    if (qrisFinal !== undefined) updatePayload.qrisFinal = qrisFinal;
+    if (teaRemainingLiters !== undefined) updatePayload.teaRemainingLiters = String(teaRemainingLiters);
+    if (notes !== undefined) updatePayload.notes = notes;
+    if (status !== undefined) updatePayload.status = status;
+    if (attendantId !== undefined) updatePayload.attendantId = attendantId;
+
+    const [updatedReport] = await db
+      .update(schema.dailyReports)
+      .set(updatePayload)
+      .where(eq(schema.dailyReports.id, id))
+      .returning();
+
+    return c.json({
+      success: true,
+      message: 'Laporan shift penjualan berhasil diperbarui',
+      data: updatedReport,
+    });
+  } catch (err: unknown) {
+    const errorDetail = err instanceof Error ? err.message : String(err);
+    console.error('[Patch Daily Report Error]:', err);
+    return c.json(
+      { success: false, error: { code: 'SERVER_ERROR', message: `Gagal memperbarui laporan shift: ${errorDetail}` } },
+      500
+    );
+  }
+});
+

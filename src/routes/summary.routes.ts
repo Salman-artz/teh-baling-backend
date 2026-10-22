@@ -404,6 +404,7 @@ summaryRouter.get('/dashboard/summary-table', requireRole('ADMIN', 'OPERATIONAL_
         boothId: r.boothId,
         boothName: r.boothName || 'Booth',
         boothAddress: r.boothAddress || '-',
+        attendantId: r.attendantId,
         attendantName: r.attendantName || 'Staf Booth',
         cashModal: modal,
         cashFinal: finalCash,
